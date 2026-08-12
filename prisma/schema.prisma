@@ -1,0 +1,124 @@
+// Prisma schema for Binary Trading Bot
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Account {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  name         String?
+  balance      Float    @default(10000)
+  currency     String   @default("USD")
+  accountType  String   @default("REAL") // REAL | PRACTICE
+  isConnected  Boolean  @default(false)
+  lastLogin    DateTime?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  operations   Operation[]
+  settings     Settings?
+  backtests    Backtest[]
+}
+
+model Settings {
+  id                 String   @id @default(cuid())
+  accountId          String   @unique
+  account            Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  // Risk Management
+  initialCapital     Float    @default(1000)
+  riskPerOperation   Float    @default(2)    // % del capital
+  maxDailyLoss       Float    @default(10)   // % del capital
+  maxDailyOperations Int      @default(20)
+  martingaleEnabled  Boolean  @default(false)
+  martingaleFactor   Float    @default(2)
+  martingaleLevels   Int      @default(2)
+  stopLossEnabled    Boolean  @default(true)
+  stopLossValue      Float    @default(5)    // % del capital
+  takeProfitEnabled  Boolean  @default(false)
+  takeProfitValue    Float    @default(10)   // % del capital
+
+  // Operation Settings
+  defaultAmount      Float    @default(25)
+  defaultExpiry      Int      @default(1)    // minutos
+  operationType      String   @default("BINARY") // BINARY | DIGITAL | FOREX
+  selectedPairs      String   @default("[]") // JSON array
+
+  // Telegram
+  telegramEnabled    Boolean  @default(false)
+  telegramBotToken   String?
+  telegramChatId     String?
+
+  // Strategy
+  strategyName       String   @default("RSI_BREAKOUT")
+  strategyConfig     String   @default("{}") // JSON
+
+  // Bot Status
+  botActive          Boolean  @default(false)
+
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+}
+
+model Operation {
+  id            String   @id @default(cuid())
+  accountId     String
+  account       Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  pair          String                       // EURUSD, EURUSD-OTC, etc
+  direction     String                       // CALL | PUT
+  amount        Float
+  expiry        Int                          // minutos
+  entryPrice    Float?
+  exitPrice     Float?
+  result        String   @default("PENDING") // WIN | LOSS | PENDING | DRAW
+  payout        Float                        // %
+  profit        Float    @default(0)
+  martingaleLevel Int     @default(0)
+  reason        String?                      // señal que disparó la entrada
+  confidence    Float    @default(0)         // 0-100
+  strategy      String?
+  brokerOrderId String?                      // id de la orden en IQ Option (null = no llegó al broker)
+  source        String   @default("AUTO")    // AUTO | MANUAL | SIMULATION
+  openedAt      DateTime @default(now())
+  closedAt      DateTime?
+
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([accountId, openedAt])
+  @@index([accountId, result])
+  @@index([accountId, pair])
+}
+
+model Backtest {
+  id            String   @id @default(cuid())
+  accountId     String
+  account       Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  name          String
+  pair          String
+  strategy      String
+  config        String   @default("{}")      // JSON de configuración
+  period        String                       // "30D" | "90D" | "1Y" etc
+
+  // Results
+  totalOperations Int      @default(0)
+  wins            Int      @default(0)
+  losses          Int      @default(0)
+  draws           Int      @default(0)
+  winRate         Float    @default(0)
+  profit          Float    @default(0)
+  maxDrawdown     Float    @default(0)
+  longestWinStreak  Int    @default(0)
+  longestLossStreak Int    @default(0)
+  profitFactor    Float    @default(0)
+  details        String   @default("[]")     // JSON con operaciones individuales
+
+  createdAt     DateTime @default(now())
+}

@@ -1,0 +1,16 @@
+{
+  "name": "iqoption-service",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "npx tsx index.ts",
+    "start": "npx tsx index.ts"
+  },
+  "dependencies": {
+    "ws": "^8.21.2",
+    "socket.io": "^4.7.2",
+    "tsx": "^4.7.0",
+    "@types/node": "^20.0.0",
+    "@types/ws": "^8.5.0"
+  }
+}
