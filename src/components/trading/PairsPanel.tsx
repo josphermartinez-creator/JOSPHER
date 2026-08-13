@@ -17,7 +17,7 @@ interface Pair {
   id: string;
   name: string;
   type: 'NORMAL' | 'OTC';
-  category: 'FOREX' | 'STOCK' | 'CRYPTO' | 'COMMODITY';
+  category: string;
   payout: number;
   available: boolean;
 }
@@ -32,6 +32,7 @@ const CATEGORY_ICONS: Record<string, any> = {
   STOCK: Building2,
   CRYPTO: Bitcoin,
   COMMODITY: Gem,
+  OTHER: Building2,
 };
 
 const CATEGORY_COLORS: Record<string, string> = {
@@ -39,7 +40,19 @@ const CATEGORY_COLORS: Record<string, string> = {
   STOCK: 'text-warning',
   CRYPTO: 'text-chart-4',
   COMMODITY: 'text-chart-5',
+  OTHER: 'text-muted-foreground',
 };
+
+// Los pares vienen del broker y pueden traer categorias que no estan en las
+// tablas de arriba. Sin esto, React recibe un icono `undefined` y la pantalla
+// entera revienta con "Element type is invalid".
+function iconoDe(categoria: string) {
+  return CATEGORY_ICONS[categoria] || CATEGORY_ICONS.OTHER;
+}
+
+function colorDe(categoria: string) {
+  return CATEGORY_COLORS[categoria] || CATEGORY_COLORS.OTHER;
+}
 
 export function PairsPanel({ settings, onUpdate }: PairsPanelProps) {
   const [pairs, setPairs] = useState<Pair[]>([]);
@@ -211,7 +224,7 @@ export function PairsPanel({ settings, onUpdate }: PairsPanelProps) {
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
           {filtered.map((pair, i) => {
             const isSelected = safeSelected.includes(pair.id);
-            const Icon = CATEGORY_ICONS[pair.category];
+            const Icon = iconoDe(pair.category);
             return (
               <motion.div
                 key={pair.id}
@@ -234,7 +247,7 @@ export function PairsPanel({ settings, onUpdate }: PairsPanelProps) {
                     </div>
                   )}
                   <div className="flex items-start gap-2 mb-2">
-                    <div className={cn('w-8 h-8 rounded-lg flex items-center justify-center bg-muted/40', CATEGORY_COLORS[pair.category])}>
+                    <div className={cn('w-8 h-8 rounded-lg flex items-center justify-center bg-muted/40', colorDe(pair.category))}>
                       <Icon className="w-4 h-4" />
                     </div>
                     <div className="flex-1 min-w-0">

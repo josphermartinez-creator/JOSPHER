@@ -49,11 +49,17 @@ const FALLBACK_PAIRS = [
   { id: 'XRPUSD', category: 'CRYPTO' },
 ];
 
-function categoryOf(id: string): string {
-  if (/^(BTC|ETH|LTC|XRP|BNB|ADA)/.test(id)) return 'CRYPTO';
-  if (/^(XAU|XAG|USOIL|UKBRENT)/.test(id)) return 'COMMODITY';
-  if (/^[A-Z]{6}(-OTC)?$/.test(id)) return 'FOREX';
-  return 'OTHER';
+/**
+ * Categoría del par. Solo puede devolver valores que la interfaz sepa pintar:
+ * si devolviera cualquier otra cosa, el panel se quedaba sin icono y la
+ * pantalla entera fallaba.
+ */
+function categoryOf(id: string): 'FOREX' | 'CRYPTO' | 'COMMODITY' | 'STOCK' {
+  const base = id.replace('-OTC', '').replace('-op', '');
+  if (/^(BTC|ETH|LTC|XRP|BNB|ADA|DASH|EOS|OMG|TRX|XLM|ZEC|DOGE|SOL|MATIC|LINK)/.test(base)) return 'CRYPTO';
+  if (/^(XAU|XAG|XPT|XPD|USOIL|UKBRENT|OIL|GOLD|SILVER)/.test(base)) return 'COMMODITY';
+  if (/^[A-Z]{6}$/.test(base)) return 'FOREX';
+  return 'STOCK';
 }
 
 function displayName(id: string): string {

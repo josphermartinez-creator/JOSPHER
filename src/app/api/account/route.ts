@@ -53,10 +53,10 @@ export async function GET() {
         bridgeConnected: health.bridgeConnected,
       },
     });
-  } catch (error) {
+  } catch (error: any) {
     console.error('GET /api/account error:', error);
     return NextResponse.json(
-      { success: false, error: 'Error al obtener la cuenta' },
+      { success: false, error: explicarError(error) },
       { status: 500 }
     );
   }
@@ -159,7 +159,9 @@ function explicarError(error: any): string {
   if (
     error?.code === 'P2021' || error?.code === 'P2022' || error?.code === 'P1012' ||
     msg.includes('no such table') || msg.includes('no such column') ||
-    msg.includes('ENOENT') || msg.includes('unable to open database')
+    msg.includes('ENOENT') ||
+    msg.toLowerCase().includes('unable to open the database') ||
+    msg.toLowerCase().includes('unable to open database')
   ) {
     return 'La base de datos no está lista. Cierra el bot y haz doble clic en reparar.bat';
   }
