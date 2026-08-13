@@ -22,8 +22,26 @@ export function CandleChart({
   showVolume = true,
   highlightLast = true,
 }: CandleChartProps) {
-  const chartHeight = showVolume ? height - 60 : height;
-  const volumeHeight = showVolume ? 50 : 0;
+  // IQ Option NO manda volumen en sus velas: el puente rellena volume:0 en
+  // todas. Antes se dividia entre el maximo (0/0 = NaN) y ese NaN acababa en
+  // los atributos y/height del SVG -> la consola se llenaba de
+  // "Received NaN for the `y` attribute" y las barras no se veian igual.
+  // Ahora: si no hay volumen de verdad, no se dibuja la franja y el grafico
+  // de precios aprovecha todo el alto.
+  const maxVolume = useMemo(() => {
+    let max = 0;
+    for (const c of candles) {
+      const v = Number(c.volume);
+      if (Number.isFinite(v) && v > max) max = v;
+    }
+    return max;
+  }, [candles]);
+
+  const hayVolumen = maxVolume > 0;
+  const mostrarVolumen = showVolume && hayVolumen;
+
+  const chartHeight = mostrarVolumen ? height - 60 : height;
+  const volumeHeight = mostrarVolumen ? 50 : 0;
 
   const { scaleY, scalePrice, minPrice, maxPrice, padding, chartWidth, candleWidth, candleSpacing } = useMemo(() => {
     if (candles.length === 0) {
@@ -38,10 +56,12 @@ export function CandleChart({
         candleSpacing: 0,
       };
     }
-    const highs = candles.map(c => c.high);
-    const lows = candles.map(c => c.low);
-    const minPrice = Math.min(...lows);
-    const maxPrice = Math.max(...highs);
+    // Solo precios validos: una vela corrupta con NaN contagiaba el minimo y
+    // el maximo, y a partir de ahi TODO el grafico salia NaN.
+    const highs = candles.map(c => Number(c.high)).filter(Number.isFinite);
+    const lows = candles.map(c => Number(c.low)).filter(Number.isFinite);
+    const minPrice = lows.length ? Math.min(...lows) : 0;
+    const maxPrice = highs.length ? Math.max(...highs) : 1;
     const range = maxPrice - minPrice || 0.001;
     const padding = { top: 20, right: 70, bottom: 20, left: 10 };
 
@@ -50,8 +70,11 @@ export function CandleChart({
     const candleSpacing = chartWidth / candles.length;
     const candleWidth = Math.max(2, candleSpacing * 0.65);
 
+    // Nunca devuelve NaN: el SVG lo rechaza y React lo reporta como error.
     const scaleY = (price: number) => {
-      const t = (price - minPrice) / range;
+      const p = Number(price);
+      if (!Number.isFinite(p)) return padding.top;
+      const t = (p - minPrice) / range;
       return padding.top + (1 - t) * (chartHeight - padding.top - padding.bottom);
     };
 
@@ -72,12 +95,6 @@ export function CandleChart({
     }
     return levels;
   }, [minPrice, maxPrice]);
-
-  // Max volume for scaling
-  const maxVolume = useMemo(() => {
-    if (candles.length === 0) return 1;
-    return Math.max(...candles.map(c => c.volume));
-  }, [candles]);
 
   if (candles.length === 0) {
     return (
@@ -149,6 +166,13 @@ export function CandleChart({
           const isForce = pattern?.type === 'FORCE_BULL' || pattern?.type === 'FORCE_BEAR';
           const isImpulse = pattern?.type === 'IMPULSE_BULL' || pattern?.type === 'IMPULSE_BEAR';
           const isLast = highlightLast && i === candles.length - 1;
+
+          // maxVolume > 0 garantizado por mostrarVolumen, asi que aqui no hay
+          // division entre cero posible.
+          const vol = Number(c.volume);
+          const volumenAlto = mostrarVolumen && Number.isFinite(vol) && vol > 0
+            ? (vol / maxVolume) * volumeHeight
+            : 0;
 
           return (
             <g key={`candle-${i}`}>
@@ -274,12 +298,12 @@ export function CandleChart({
               )}
 
               {/* Volume bars */}
-              {showVolume && (
+              {mostrarVolumen && volumenAlto > 0 && (
                 <rect
                   x={x - candleWidth / 2}
-                  y={height - 20 - (c.volume / maxVolume) * volumeHeight}
+                  y={height - 20 - volumenAlto}
                   width={candleWidth}
-                  height={(c.volume / maxVolume) * volumeHeight}
+                  height={volumenAlto}
                   fill={color}
                   opacity={0.3}
                 />
