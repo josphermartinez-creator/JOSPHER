@@ -3,6 +3,18 @@ title Quantum Bot - Instalacion
 color 0A
 cd /d "%~dp0"
 
+:: Los programas de VPN suelen dejar un proxy SOCKS en las variables de
+:: entorno y entonces pip falla con "Missing dependencies for SOCKS support".
+:: Se limpian solo para esta ventana.
+set "ALL_PROXY="
+set "all_proxy="
+set "HTTP_PROXY="
+set "http_proxy="
+set "HTTPS_PROXY="
+set "https_proxy="
+set "NO_PROXY=*"
+set "no_proxy=*"
+
 echo.
 echo ============================================================
 echo   QUANTUM BOT - INSTALACION (SOLO PRIMERA VEZ)
@@ -49,15 +61,23 @@ echo.
 
 :: ====== PASO 5: Instalar dependencias de Python ======
 echo [5/6] Instalando dependencias de Python...
-python -m pip install --upgrade requests flask flask-cors websocket-client
-echo.
+python -m pip install --quiet --disable-pip-version-check pysocks >nul 2>&1
+
+:: websocket-client NO se actualiza: iqoptionapi necesita la 0.56 exacta.
+python -m pip install --disable-pip-version-check --upgrade requests flask flask-cors
+if errorlevel 1 goto :py_error
+
 echo       Instalando iqoptionapi desde GitHub...
-echo       (la version de PyPI esta abandonada y NO sirve para operar)
-python -m pip uninstall -y iqoptionapi >nul 2>&1
-python -m pip install https://github.com/iqoptionapi/iqoptionapi/archive/refs/heads/master.zip
+python -m pip install --disable-pip-version-check --upgrade --force-reinstall --no-deps https://github.com/iqoptionapi/iqoptionapi/archive/refs/heads/master.zip
+if errorlevel 1 goto :py_error
+
+echo       Fijando websocket-client en la version 0.56...
+python -m pip install --disable-pip-version-check "websocket-client==0.56"
 if errorlevel 1 goto :py_error
 
 python -c "from iqoptionapi.stable_api import IQ_Option" >nul 2>&1
+if errorlevel 1 goto :py_error
+python -c "import websocket,sys; sys.exit(0 if websocket.__version__.startswith('0.5') else 1)" >nul 2>&1
 if errorlevel 1 goto :py_error
 echo       Dependencias de Python instaladas - OK
 echo.
@@ -67,9 +87,9 @@ echo.
 :: hace falta ningun archivo .env.
 echo [6/6] Preparando la base de datos...
 cd /d "%~dp0"
-call npx prisma generate
+call npm run db:generate
 if errorlevel 1 goto :db_error
-call npx prisma db push --accept-data-loss
+call npm run db:push
 if errorlevel 1 goto :db_error
 echo       Base de datos lista - OK
 echo.
@@ -112,8 +132,8 @@ exit /b 1
 echo.
 echo [ERROR] No se pudo instalar la libreria de IQ Option.
 echo.
-echo Instalala a mano con:
-echo   python -m pip install https://github.com/iqoptionapi/iqoptionapi/archive/refs/heads/master.zip
+echo Si el error menciona SOCKS o un proxy, cierra tu VPN y vuelve a intentarlo.
+echo Si no, haz doble clic en reparar.bat
 echo.
 pause
 exit /b 1
