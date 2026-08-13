@@ -62,7 +62,8 @@ console.log('\n== 1. Detecta el patrón sobre velas del broker ==');
   const velas = construirSerie();
   const s = detectSignal('PAR-A', velas);
   check('da señal', s !== null);
-  check('la dirección es VENTA (continuidad del impulso bajista)', s?.direction === 'PUT', s?.direction);
+  check('la dirección es COMPRA (a favor de la vela de fuerza verde)',
+    s?.direction === 'CALL', s?.direction);
   check('el precio de referencia es el cierre de la vela de fuerza',
     s?.entryPrice === velas[velas.length - 2].close, String(s?.entryPrice));
   check('el motivo explica el patrón', (s?.reason || '').includes('Impulso'), s?.reason);

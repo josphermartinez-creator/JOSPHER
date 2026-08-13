@@ -13,10 +13,12 @@
  *   2. INDECISIÓN   Un doji: cuerpo pequeño con mecha arriba y abajo, y del
  *                   COLOR CONTRARIO al impulso. Impulso bajista → doji verde.
  *   3. FUERZA       Vela de buen tamaño, del MISMO color que el doji, que
- *                   sobrepasa la mecha del doji (la de arriba o la de abajo,
- *                   según el caso).
- *   4. CONTINUIDAD  Al cerrar la vela de fuerza se entra en la siguiente vela,
- *                   a favor del impulso.
+ *                   sobrepasa CON EL CUERPO la mecha del doji (la de arriba o
+ *                   la de abajo, según el caso).
+ *   4. CONTINUIDAD  Al cerrar la vela de fuerza se entra en la vela siguiente,
+ *                   A FAVOR DE LA VELA DE FUERZA (no del impulso).
+ *                   Impulso bajista → doji verde → fuerza verde → se COMPRA.
+ *                   Impulso alcista → doji rojo  → fuerza roja  → se VENDE.
  *
  *   impulso + doji + fuerza = entrada en la vela de continuidad
  *
@@ -75,8 +77,12 @@ export interface StrategyConfig {
   forceMinRangeATR: number;
   /** Debe sobrepasar la mecha del doji. */
   forceMustBreakWick: boolean;
-  /** Cómo la sobrepasa: 'wick' basta con tocarla, 'close' tiene que cerrar más allá. */
-  forceBreakMode: 'wick' | 'close';
+  /**
+   * Cómo se sobrepasa la mecha del doji:
+   *   'body' (por defecto) el CUERPO tiene que quedar más allá de la mecha.
+   *   'wick' basta con que la mecha de la vela de fuerza la toque.
+   */
+  forceBreakMode: 'body' | 'wick';
   /** La vela de fuerza debe ser del mismo color que el doji. */
   forceSameColorAsDoji: boolean;
 
@@ -99,10 +105,12 @@ export interface StrategyConfig {
 
   // ---- Dirección y confianza ----
   /**
-   * 'continuity' = se opera a favor del impulso (impulso bajista → PUT).
-   * 'reversal'   = se opera en contra. La regla descrita es 'continuity'.
+   * Hacia dónde va la entrada en la vela de continuidad:
+   *   'fuerza'  (por defecto) a favor de la VELA DE FUERZA. Es la regla:
+   *             impulso bajista → doji verde → fuerza verde → COMPRA.
+   *   'impulso' a favor del impulso previo (lo contrario).
    */
-  direction: 'continuity' | 'reversal';
+  direction: 'fuerza' | 'impulso';
   /** Confianza mínima para operar (0-100). */
   minConfidence: number;
 }
@@ -122,7 +130,7 @@ export const DEFAULT_STRATEGY_CONFIG: StrategyConfig = {
   forceMaxBodyPct: 100,
   forceMinRangeATR: 0.8,
   forceMustBreakWick: true,
-  forceBreakMode: 'wick',
+  forceBreakMode: 'body',
   forceSameColorAsDoji: true,
 
   maxCandlesImpulseToDoji: 1,
@@ -134,7 +142,7 @@ export const DEFAULT_STRATEGY_CONFIG: StrategyConfig = {
   lateralLookback: 14,
   lateralMinRangeATR: 0,
 
-  direction: 'continuity',
+  direction: 'fuerza',
   minConfidence: 65,
 };
 
@@ -421,11 +429,16 @@ export function esVelaFuerza(
 
   // Sobrepasar la mecha del doji: la de arriba si vamos hacia arriba, la de
   // abajo en el caso contrario.
+  // Por defecto se mide con el CUERPO (borde del cuerpo en el sentido de la
+  // ruptura), no con la mecha: una vela que solo asoma la mecha no vale.
   const haciaArriba = colorEsperadoDoji(impulso) === 'verde'; // impulso bajista → doji/fuerza verdes
   const referencia = haciaArriba ? doji.candle.high : doji.candle.low;
-  const puntoVela = config.forceBreakMode === 'close'
-    ? v.candle.close
-    : (haciaArriba ? v.candle.high : v.candle.low);
+  const bordeCuerpo = haciaArriba
+    ? Math.max(v.candle.open, v.candle.close)
+    : Math.min(v.candle.open, v.candle.close);
+  const puntoVela = config.forceBreakMode === 'wick'
+    ? (haciaArriba ? v.candle.high : v.candle.low)
+    : bordeCuerpo;
 
   const supera = haciaArriba ? puntoVela - referencia : referencia - puntoVela;
 
@@ -557,11 +570,15 @@ export function evaluarEn(
       const fuerza = esVelaFuerza(fuerzaVela, dojiVela, impulso.sentido, config, atr);
       if (!fuerza) continue;
 
-      // Continuidad: se opera a favor del impulso
-      const aFavor: Direccion = impulso.sentido === 'ALCISTA' ? 'CALL' : 'PUT';
-      const direction: Direccion = config.direction === 'reversal'
-        ? (aFavor === 'CALL' ? 'PUT' : 'CALL')
-        : aFavor;
+      // La entrada va a favor de la VELA DE FUERZA: si la fuerza es verde se
+      // compra, si es roja se vende. Como la fuerza es del color del doji, y el
+      // doji es del color contrario al impulso, la entrada queda en contra del
+      // impulso previo (que es justo lo que se ve en el gráfico: el precio se
+      // gira y la vela de continuidad sigue a la de fuerza).
+      const aFavorDeLaFuerza: Direccion = fuerza.rompe === 'SUPERIOR' ? 'CALL' : 'PUT';
+      const direction: Direccion = config.direction === 'impulso'
+        ? (aFavorDeLaFuerza === 'CALL' ? 'PUT' : 'CALL')
+        : aFavorDeLaFuerza;
 
       const confidence = calcularConfianza(impulso, dojiVela, fuerza, adx, config);
       const reason = construirMotivo(impulso, dojiVela, fuerzaVela, fuerza, direction, adx);
@@ -694,8 +711,8 @@ function construirMotivo(
   return [
     `Impulso ${impulso.sentido.toLowerCase()} (${impulso.velas} velas, ${impulso.avanceATR.toFixed(1)} ATR, retroceso ${impulso.retrocesoPct.toFixed(0)}%)`,
     `Doji ${doji.color} (cuerpo ${doji.bodyPct.toFixed(0)}%)`,
-    `Fuerza ${fuerzaVela.color} ${fuerza.rangoATR.toFixed(1)} ATR rompe mecha ${fuerza.rompe.toLowerCase()}`,
-    `${accion} en continuidad · ADX ${adx.toFixed(0)}`,
+    `Fuerza ${fuerzaVela.color} ${fuerza.rangoATR.toFixed(1)} ATR rompe con cuerpo la mecha ${fuerza.rompe.toLowerCase()}`,
+    `${accion} a favor de la fuerza · ADX ${adx.toFixed(0)}`,
   ].join(' → ');
 }
 
