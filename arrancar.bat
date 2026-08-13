@@ -12,6 +12,25 @@ echo.
 
 if not exist "node_modules" goto :no_install
 
+:: ====== PASO 0: Comprobaciones que hacen fallar el login ======
+:: Si el proyecto se bajo como ZIP de GitHub, el .env NO viene incluido
+:: (esta en .gitignore) y sin DATABASE_URL falla toda consulta a la base de
+:: datos: el login devuelve error sin decir por que.
+if not exist "%~dp0db" mkdir "%~dp0db"
+if exist "%~dp0.env" goto :env_listo
+echo [AVISO] No habia archivo .env - se crea ahora
+(
+echo DATABASE_URL="file:./db/custom.db"
+)> "%~dp0.env"
+:env_listo
+
+if exist "%~dp0db\custom.db" goto :bd_lista
+echo [AVISO] Falta la base de datos - creandola...
+call npx prisma db push --accept-data-loss
+if errorlevel 1 goto :bd_error
+:bd_lista
+echo.
+
 :: ====== PASO 1: Limpiar procesos anteriores ======
 echo [1/6] Limpiando procesos anteriores...
 for /f "tokens=5" %%a in ('netstat -ano ^| findstr ":3000 " ^| findstr "LISTENING" 2^>nul') do taskkill /PID %%a /F >nul 2>&1
@@ -97,6 +116,18 @@ exit /b 0
 :no_bridge
 echo       [ERROR] No se encuentra python-bridge\iqoption_bridge.py
 echo       El bot no puede operar sin el puente.
+pause
+exit /b 1
+
+:bd_error
+echo.
+echo [ERROR] No se pudo crear la base de datos.
+echo Ejecuta instalar.bat, o a mano desde una ventana de CMD (no PowerShell):
+echo   npx prisma db push
+echo.
+echo Si usas PowerShell y sale "la ejecucion de scripts esta deshabilitada",
+echo escribe primero  cmd  y ejecuta el comando ahi.
+echo.
 pause
 exit /b 1
 
