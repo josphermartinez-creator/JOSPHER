@@ -75,8 +75,9 @@ export function PairsPanel({ settings, onUpdate }: PairsPanelProps) {
         if (data.source === 'fallback') {
           // Sin broker no se sabe qué mercados están abiertos: elegir un par
           // cerrado hace que el bot no pueda entrar.
-          toast.warning('Sin conexión con el broker', {
+          toast.warning('No se pudo leer la lista del broker', {
             description: data.warning || 'No se puede saber qué pares están abiertos.',
+            duration: 8000,
           });
         }
       }

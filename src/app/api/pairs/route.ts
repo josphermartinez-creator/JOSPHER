@@ -67,7 +67,7 @@ function displayName(id: string): string {
 
 export async function GET() {
   // 1) Lista real del broker (incluye si está abierto ahora y el payout real)
-  const res = await serviceRequest<any>(IQ_SERVICE_URL, 'get-assets', undefined, 25000);
+  const res = await serviceRequest<any>(IQ_SERVICE_URL, 'get-assets', undefined, 55000);
 
   if (res?.success && Array.isArray(res.assets) && res.assets.length > 0) {
     const pairs = res.assets.map((a: any) => ({

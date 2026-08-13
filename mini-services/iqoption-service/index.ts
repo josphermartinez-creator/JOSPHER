@@ -211,7 +211,9 @@ io.on('connection', (socket) => {
       return;
     }
 
-    const res = await bridgeFetch('/assets', {}, 20000);
+    // La primera carga puede tardar: el broker devuelve cientos de activos.
+    // Con 20s se agotaba el tiempo y salia "el puente no esta disponible".
+    const res = await bridgeFetch('/assets', {}, 45000);
     if (!res.success) {
       callback({ success: false, error: res.error });
       return;

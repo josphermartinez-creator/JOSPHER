@@ -107,22 +107,89 @@ connection_state = {
     'last_error': None,
 }
 
-# Cache de payouts (se refresca cada 60s; pedirlo en cada orden cuesta ~1s)
-_payout_cache = {'data': {}, 'ts': 0}
-_PAYOUT_TTL = 60
-
-# Cache de activos abiertos
-_open_cache = {'data': {}, 'ts': 0}
-_OPEN_TTL = 60
-
+# Cache de activos (nombre -> abierto + payout). Se refresca cada 60s.
+_assets_cache = {'data': {}, 'ts': 0}
+_ASSETS_TTL = 60
 
 # ====== CONEXION ======
+
+def _reset_estado_libreria():
+    """
+    iqoptionapi guarda el estado del websocket en variables GLOBALES del modulo
+    (iqoptionapi/global_value.py), compartidas por todas las sesiones. Si
+    quedan valores de la sesion anterior, el siguiente connect() puede darse
+    por cerrado nada mas empezar, o quedarse girando para siempre.
+    """
+    try:
+        from iqoptionapi import global_value
+        global_value.check_websocket_if_connect = None
+        global_value.check_websocket_if_error = False
+        global_value.websocket_error_reason = None
+        global_value.ssl_Mutual_exclusion = False
+        global_value.ssl_Mutual_exclusion_write = False
+        global_value.SSID = None
+        global_value.balance_id = None
+    except Exception as e:
+        logger.warning("No se pudo limpiar el estado de la libreria: %s", e)
+
+
+def _cerrar_cliente(cliente):
+    """
+    Cierra la conexion de verdad.
+
+    stable_api.IQ_Option NO tiene metodo disconnect(): antes se llamaba a
+    `iq_client.disconnect()`, saltaba un AttributeError que el try/except se
+    tragaba, y el websocket viejo se quedaba abierto. Al volver a entrar, su
+    callback on_close pisaba el estado global de la sesion nueva y el login se
+    quedaba colgado. El metodo bueno es api.close().
+
+    Se llama SIEMPRE desde un hilo suelto: close() hace join() del hilo del
+    websocket y puede tardar o no volver nunca.
+    """
+    if cliente is None:
+        return
+    try:
+        cliente.api.close()
+    except Exception as e:
+        logger.debug("Cierre del websocket: %s", e)
+
+
+def _cerrar_en_segundo_plano(cliente):
+    if cliente is None:
+        return
+    threading.Thread(target=_cerrar_cliente, args=(cliente,), daemon=True).start()
+
+
+def _conectar_con_limite(email, password, account_type, limite=45):
+    """
+    connect() de la libreria puede quedarse en un bucle infinito: start_websocket()
+    gira sobre variables globales sin ningun tiempo maximo. Se ejecuta en un hilo
+    aparte para poder rendirse y devolver un error en vez de dejar el puente mudo.
+    """
+    caja = {}
+
+    def trabajo():
+        try:
+            caja['r'] = _do_connect(email, password, account_type)
+        except Exception as e:
+            caja['r'] = (False, 'Error conectando: %s' % e)
+
+    hilo = threading.Thread(target=trabajo, daemon=True)
+    hilo.start()
+    hilo.join(limite)
+
+    if hilo.is_alive():
+        return False, ('IQ Option no respondio en %ds. Cierra el bot con '
+                       'detener.bat y vuelve a abrirlo con arrancar.bat.' % limite)
+    return caja.get('r', (False, 'Error desconocido al conectar'))
+
 
 def _do_connect(email, password, account_type):
     """Conecta y deja el cliente listo. Devuelve (ok, perfil_o_mensaje)."""
     global iq_client
 
     logger.info("Conectando a IQ Options como %s (%s)...", email, account_type)
+    _reset_estado_libreria()
     client = IQ_Option(email, password)
     check, reason = client.connect()
 
@@ -178,8 +245,10 @@ def _ensure_connection():
         pass
 
     logger.warning("Websocket caido. Reconectando...")
+    _cerrar_en_segundo_plano(iq_client)
+    iq_client = None
     try:
-        ok, result = _do_connect(
+        ok, result = _conectar_con_limite(
             _credentials['email'],
             _credentials['password'],
             _credentials['account_type'],
@@ -206,49 +275,55 @@ def _asset_exists(pair):
     return pair in ACTIVES
 
 
-def _get_open_assets(force=False):
-    """{'EURUSD-OTC': {'open': True, 'kind': 'turbo'}, ...} desde el broker."""
+def _get_binary_assets(force=False):
+    """
+    {'EURUSD-OTC': {'open': True, 'kind': 'turbo', 'payout': 87.0}, ...}
+
+    UNA sola llamada al broker. Antes esto usaba get_all_open_time() +
+    get_all_profit(), que juntos hacen cinco viajes al servidor (incluidos
+    digital, cfd, forex y crypto, que este bot ni siquiera opera) y varios con
+    esperas internas de 30 segundos. La pantalla de pares se pasaba de tiempo y
+    salia "el puente no esta disponible".
+
+    get_all_init_v2() devuelve de golpe, para turbo y binary: el nombre, si
+    esta habilitado, si esta suspendido y la comision (de donde sale el payout).
+    """
     now = time.time()
-    if not force and _open_cache['data'] and now - _open_cache['ts'] < _OPEN_TTL:
-        return _open_cache['data']
+    if not force and _assets_cache['data'] and now - _assets_cache['ts'] < _ASSETS_TTL:
+        return _assets_cache['data']
 
     with _lock:
-        raw = iq_client.get_all_open_time()
+        raw = iq_client.get_all_init_v2()
+
+    if not raw:
+        raise RuntimeError('el broker no devolvio la lista de activos')
 
     result = {}
     for kind in ('turbo', 'binary'):
-        for name, info in (raw.get(kind) or {}).items():
-            is_open = bool(info.get('open'))
-            if name not in result or is_open:
-                result[name] = {'open': is_open, 'kind': kind}
+        actives = ((raw.get(kind) or {}).get('actives') or {})
+        for active in actives.values():
+            # el nombre viene como "front.EURUSD-OTC"
+            name = str(active.get('name', ''))
+            name = name.split('.')[-1]
+            if not name:
+                continue
 
-    _open_cache['data'] = result
-    _open_cache['ts'] = now
-    return result
+            is_open = active.get('enabled') is True and active.get('is_suspended') is not True
 
+            payout = 0.0
+            try:
+                commission = active['option']['profit']['commission']
+                payout = round(100.0 - float(commission), 2)
+            except (KeyError, TypeError, ValueError):
+                payout = 0.0
 
-def _get_payouts(force=False):
-    """{'EURUSD-OTC': 87.0, ...} - payout REAL en porcentaje."""
-    now = time.time()
-    if not force and _payout_cache['data'] and now - _payout_cache['ts'] < _PAYOUT_TTL:
-        return _payout_cache['data']
+            anterior = result.get(name)
+            # Si el par sale en turbo y en binary, se queda el que este abierto
+            if anterior is None or (is_open and not anterior['open']):
+                result[name] = {'open': is_open, 'kind': kind, 'payout': payout}
 
-    with _lock:
-        raw = iq_client.get_all_profit()
-
-    result = {}
-    for name, info in raw.items():
-        # get_all_profit devuelve fracciones: 0.87 = 87%
-        value = info.get('turbo') or info.get('binary') or 0
-        try:
-            value = float(value)
-        except (TypeError, ValueError):
-            continue
-        if value > 0:
-            result[name] = round(value * 100, 2)
-
-    _payout_cache['data'] = result
-    _payout_cache['ts'] = now
+    _assets_cache['data'] = result
+    _assets_cache['ts'] = now
     return result
 
 
@@ -293,21 +368,21 @@ def login():
     if account_type not in ('PRACTICE', 'REAL'):
         return _fail('accountType debe ser PRACTICE o REAL')
 
-    with _lock:
-        if iq_client is not None:
-            try:
-                iq_client.disconnect()
-            except Exception:
-                pass
-            iq_client = None
+    # Cerrar la sesion anterior SIN bloquear: si el cierre se atasca, el puente
+    # entero se quedaria mudo y el sintoma seria "no se puede conectar al puente".
+    anterior, iq_client = iq_client, None
+    _cerrar_en_segundo_plano(anterior)
+    if anterior is not None:
+        time.sleep(1)  # margen para que el websocket viejo termine de morir
+    _reset_estado_libreria()
 
-        try:
-            ok, result = _do_connect(email, password, account_type)
-        except Exception as e:
-            logger.error("Error conectando: %s", e)
-            connection_state['connected'] = False
-            connection_state['last_error'] = str(e)
-            return _fail('Error conectando: %s' % e, 500)
+    try:
+        ok, result = _conectar_con_limite(email, password, account_type)
+    except Exception as e:
+        logger.error("Error conectando: %s", e)
+        connection_state['connected'] = False
+        connection_state['last_error'] = str(e)
+        return _fail('Error conectando: %s' % e, 500)
 
     if not ok:
         connection_state['connected'] = False
@@ -319,8 +394,7 @@ def login():
         'password': password,
         'account_type': account_type,
     })
-    _payout_cache['ts'] = 0
-    _open_cache['ts'] = 0
+    _assets_cache['ts'] = 0
 
     return jsonify({
         'success': True,
@@ -332,13 +406,13 @@ def login():
 @app.route('/logout', methods=['POST'])
 def logout():
     global iq_client
-    with _lock:
-        if iq_client is not None:
-            try:
-                iq_client.disconnect()
-            except Exception:
-                pass
-        iq_client = None
+    # Primero se suelta la referencia, luego se cierra en segundo plano. Si se
+    # hiciera al reves y el cierre se atascara, el siguiente login no podria
+    # entrar nunca.
+    anterior, iq_client = iq_client, None
+    _cerrar_en_segundo_plano(anterior)
+    _assets_cache['ts'] = 0
+    _reset_estado_libreria()
 
     _credentials.update({'email': None, 'password': None})
     connection_state.update({
@@ -357,14 +431,13 @@ def assets():
         return _fail(error)
 
     try:
-        open_assets = _get_open_assets()
-        payouts = _get_payouts()
+        assets = _get_binary_assets()
     except Exception as e:
         logger.error("Error leyendo activos: %s", e)
         return _fail('Error leyendo activos: %s' % e, 500)
 
     result = []
-    for name, info in open_assets.items():
+    for name, info in assets.items():
         if name not in ACTIVES:
             # No se puede operar con iq.buy() si no esta en ACTIVES
             continue
@@ -374,7 +447,7 @@ def assets():
             'isOTC': name.endswith('-OTC'),
             'open': info['open'],
             'kind': info['kind'],
-            'payout': payouts.get(name, 0),
+            'payout': info['payout'],
         })
 
     result.sort(key=lambda a: (not a['open'], a['id']))
@@ -455,20 +528,18 @@ def place_order():
         return _fail('El par %s no se puede operar con esta API' % pair, 404)
 
     # El mercado tiene que estar abierto: si no, buy() falla o se queda colgado
+    payout = 0
     try:
-        open_assets = _get_open_assets()
-        info = open_assets.get(pair)
+        assets = _get_binary_assets()
+        info = assets.get(pair)
         if info is not None and not info['open']:
             return _fail('El mercado de %s esta cerrado ahora mismo' % pair, 409)
+        if info is not None:
+            payout = info['payout']
     except Exception as e:
         logger.warning("No se pudo comprobar si %s esta abierto: %s", pair, e)
 
     expiration_minutes = max(1, int(round(expiration / 60.0)))
-
-    try:
-        payout = _get_payouts().get(pair, 0)
-    except Exception:
-        payout = 0
 
     logger.info("Orden REAL: %s %s $%.2f exp=%dmin", pair, direction, amount, expiration_minutes)
 
