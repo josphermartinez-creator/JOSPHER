@@ -5,6 +5,9 @@
  * el backtest. Aquí solo se decide cuándo llamarlo y se evita repetir el
  * análisis de una vela que ya se miró.
  *
+ * La entrada va a favor de la VELA DE FUERZA (impulso bajista → doji verde →
+ * fuerza verde → COMPRA), no a favor del impulso.
+ *
  * Ya no hay máquina de estados por fases. Antes el bot guardaba "vi un impulso"
  * y se quedaba esperando un doji indefinidamente: un doji veinte velas después
  * seguía disparando la entrada. Ahora cada vela cerrada se evalúa entera —

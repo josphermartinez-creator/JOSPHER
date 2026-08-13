@@ -4,8 +4,8 @@
  *
  * Cada prueba comprueba UNA de las reglas tal como están descritas:
  *   impulso (4+ velas, colores mezclados) + doji del color contrario +
- *   vela de fuerza del color del doji que sobrepasa su mecha
- *   = entrada a favor del impulso en la vela de continuidad.
+ *   vela de fuerza del color del doji que sobrepasa CON CUERPO su mecha
+ *   = entrada A FAVOR DE LA VELA DE FUERZA en la vela de continuidad.
  */
 
 import {
@@ -168,13 +168,15 @@ grupo('1. Patrón completo → señal');
 {
   const ev = evaluarFinal(escenarioBajista());
   check('impulso bajista + doji verde + fuerza verde da señal', ev.signal !== null, ev.detalle);
-  check('la dirección es VENTA (continuidad del impulso)', ev.signal?.direction === 'PUT', ev.signal?.direction);
+  check('la dirección es COMPRA (a favor de la vela de fuerza verde)',
+    ev.signal?.direction === 'CALL', ev.signal?.direction);
   check('la entrada se marca en la vela de continuidad',
     ev.signal?.index === ev.signal!.forceIndex + 1);
 
   const evA = evaluarFinal(escenarioAlcista());
   check('caso espejo: impulso alcista + doji rojo + fuerza roja', evA.signal !== null, evA.detalle);
-  check('la dirección es COMPRA', evA.signal?.direction === 'CALL', evA.signal?.direction);
+  check('la dirección es VENTA (a favor de la vela de fuerza roja)',
+    evA.signal?.direction === 'PUT', evA.signal?.direction);
 }
 
 // ------------------------------------------------------------
@@ -263,7 +265,9 @@ grupo('7. La vela de fuerza tiene que ser "de buen tamaño"');
   const ev = evaluarFinal(s);
   check('una vela minúscula no es vela de fuerza', ev.signal === null, ev.detalle);
 
-  const permisivo = evaluarFinal(s, cfg({ forceMinBodyPct: 1, forceMinRangeATR: 0 }));
+  // Esa vela solo asoma con la mecha, así que además de bajar los mínimos hay
+  // que permitir la ruptura por mecha para que llegue a pasar.
+  const permisivo = evaluarFinal(s, cfg({ forceMinBodyPct: 1, forceMinRangeATR: 0, forceBreakMode: 'wick' }));
   check('bajando los mínimos, la misma vela pasa', permisivo.signal !== null, permisivo.detalle);
 }
 
@@ -349,10 +353,28 @@ grupo('12. Los parámetros del panel se respetan');
 }
 
 // ------------------------------------------------------------
-grupo('13. Modo reversión (por si la dirección fuera la contraria)');
+grupo('13. Modo "a favor del impulso" (por si alguna vez se quiere lo contrario)');
 {
-  const ev = evaluarFinal(escenarioBajista(), cfg({ direction: 'reversal' }));
-  check('en modo reversión la señal se invierte', ev.signal?.direction === 'CALL', ev.signal?.direction);
+  const ev = evaluarFinal(escenarioBajista(), cfg({ direction: 'impulso' }));
+  check('con direction=impulso la señal se invierte', ev.signal?.direction === 'PUT', ev.signal?.direction);
+}
+
+// ------------------------------------------------------------
+grupo('15. La vela de fuerza tiene que pasar la mecha CON EL CUERPO');
+{
+  const s = new Serie().bajista(40).bajista(4).doji('verde');
+  const doji = s.velas[s.velas.length - 1];
+  const o = s.ultimoCierre;
+  // Verde y grande, pero su CUERPO cierra por debajo de la mecha del doji:
+  // solo la asoma con la mecha superior.
+  const c = doji.high - 0.0001;
+  s.add(o - 0.0016, doji.high + 0.0004, o - 0.0018, c);
+
+  const porCuerpo = evaluarFinal(s);
+  check('si solo la pasa con la mecha, no vale', porCuerpo.signal === null, porCuerpo.detalle);
+
+  const porMecha = evaluarFinal(s, cfg({ forceBreakMode: 'wick' }));
+  check('con forceBreakMode=wick esa misma vela sí valdría', porMecha.signal !== null, porMecha.detalle);
 }
 
 // ------------------------------------------------------------

@@ -215,7 +215,7 @@ export function StrategyPanel({ settings, onSettingsUpdate }: StrategyPanelProps
           </div>
           <div>
             <h2 className="font-black text-lg">Estrategia: Indecisión, Fuerza y Continuidad</h2>
-            <p className="text-xs text-muted-foreground">Detección de doji · vela gatillo · continuación</p>
+            <p className="text-xs text-muted-foreground">Impulso → doji → vela de fuerza → entrada a favor de la fuerza</p>
           </div>
         </div>
         <div className="flex items-center gap-2">
@@ -391,6 +391,30 @@ export function StrategyPanel({ settings, onSettingsUpdate }: StrategyPanelProps
                   <Switch
                     checked={config.forceMustBreakWick ?? true}
                     onCheckedChange={(v) => updateConfig('forceMustBreakWick', v)}
+                  />
+                </div>
+                <div className="flex items-center justify-between p-3 rounded-xl bg-muted/30">
+                  <div>
+                    <div className="text-xs font-bold">Romper con el cuerpo</div>
+                    <div className="text-[10px] text-muted-foreground">
+                      Si se apaga, basta con que la mecha la toque
+                    </div>
+                  </div>
+                  <Switch
+                    checked={(config.forceBreakMode ?? 'body') === 'body'}
+                    onCheckedChange={(v) => updateConfig('forceBreakMode', v ? 'body' : 'wick')}
+                  />
+                </div>
+                <div className="flex items-center justify-between p-3 rounded-xl bg-muted/30">
+                  <div>
+                    <div className="text-xs font-bold">Entrar a favor de la fuerza</div>
+                    <div className="text-[10px] text-muted-foreground">
+                      Fuerza verde → COMPRA. Apagado: a favor del impulso
+                    </div>
+                  </div>
+                  <Switch
+                    checked={(config.direction ?? 'fuerza') === 'fuerza'}
+                    onCheckedChange={(v) => updateConfig('direction', v ? 'fuerza' : 'impulso')}
                   />
                 </div>
                 <div className="flex items-center justify-between p-3 rounded-xl bg-muted/30">
