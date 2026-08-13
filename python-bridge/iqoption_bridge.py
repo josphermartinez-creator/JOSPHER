@@ -29,16 +29,48 @@ except ImportError:
     print("Ejecuta: pip install flask flask-cors")
     sys.exit(1)
 
+# ====== Comprobacion de websocket-client ANTES de nada ======
+# iqoptionapi esta escrita para websocket-client 0.56 (su setup.py lo fija asi).
+# En la version 1.x cambiaron como se llaman los callbacks: ahora siempre
+# reciben la instancia del websocket como primer argumento, y los de la
+# libreria (on_message(self, message), on_close(wss)) no la esperan. El
+# resultado es que la conexion revienta con un TypeError raro justo al iniciar
+# sesion. Mejor avisar aqui, claro, que fallar despues sin explicacion.
+try:
+    import websocket as _ws
+    _WS_VERSION = str(getattr(_ws, '__version__', '?'))
+except ImportError:
+    _WS_VERSION = None
+
+if _WS_VERSION is None or not _WS_VERSION.startswith('0.5'):
+    print("=" * 62)
+    print("  ERROR: version incorrecta de websocket-client")
+    print("=" * 62)
+    print()
+    print("  Instalada : %s" % (_WS_VERSION or "no instalada"))
+    print("  Necesaria : 0.56")
+    print()
+    print("  La libreria de IQ Option solo funciona con la 0.56. Con una")
+    print("  version mas nueva el login falla sin decir por que.")
+    print()
+    print("  Arreglo: cierra esta ventana y haz doble clic en reparar.bat")
+    print()
+    print("  O a mano:  python -m pip install \"websocket-client==0.56\"")
+    print()
+    sys.exit(1)
+
 try:
     from iqoptionapi.stable_api import IQ_Option
     from iqoptionapi.constants import ACTIVES
-    print("[OK] iqoptionapi importada correctamente")
-except ImportError:
-    print("[ERROR] iqoptionapi no instalada o version incorrecta")
+    print("[OK] iqoptionapi importada correctamente (websocket-client %s)" % _WS_VERSION)
+except ImportError as e:
+    print("[ERROR] iqoptionapi no instalada o version incorrecta: %s" % e)
     print()
-    print("Instala la version correcta:")
-    print("  pip install requests")
+    print("Arreglo: cierra esta ventana y haz doble clic en reparar.bat")
+    print()
+    print("O a mano:")
     print("  pip install https://github.com/iqoptionapi/iqoptionapi/archive/refs/heads/master.zip")
+    print("  pip install \"websocket-client==0.56\"")
     sys.exit(1)
 
 # ====== CONFIGURACION ======

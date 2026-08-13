@@ -8,10 +8,9 @@ cd /d "%~dp0"
 
 :: ------------------------------------------------------------------
 :: Proxy / VPN
-:: Si hay un proxy SOCKS en las variables de entorno (lo suelen poner los
-:: programas de VPN), pip falla con:
-::    "Missing dependencies for SOCKS support"
-:: porque pip necesita la libreria PySocks para hablar con proxies SOCKS.
+:: Los programas de VPN suelen dejar un proxy SOCKS en las variables de
+:: entorno, y pip falla con "Missing dependencies for SOCKS support" porque
+:: necesita la libreria PySocks para hablar con proxies SOCKS.
 :: Se limpian SOLO dentro de esta ventana: no toca la configuracion del
 :: sistema ni apaga la VPN.
 :: ------------------------------------------------------------------
@@ -82,23 +81,31 @@ echo [4/5] Librerias de Python...
 python --version >nul 2>&1
 if errorlevel 1 goto :error_py_falta
 
-:: PySocks primero: si mas adelante hace falta el proxy SOCKS, ya estara.
+:: PySocks primero: si mas adelante hace falta un proxy SOCKS, ya estara.
 python -m pip install --quiet --disable-pip-version-check pysocks >nul 2>&1
 
-python -m pip install --disable-pip-version-check --upgrade requests flask flask-cors websocket-client
+:: OJO: websocket-client NO se actualiza, a proposito.
+:: iqoptionapi esta escrita para la 0.56 (su setup.py la fija asi). En la 1.x
+:: cambiaron como se llaman los callbacks del websocket y la libreria revienta
+:: justo al iniciar sesion.
+echo       - requests, flask...
+python -m pip install --disable-pip-version-check --upgrade requests flask flask-cors
 if errorlevel 1 goto :error_pip
 
-:: La version de iqoptionapi de PyPI esta abandonada y NO sirve para operar:
-:: la buena es la de GitHub, que es la que espera el puente.
-python -c "from iqoptionapi.stable_api import IQ_Option" >nul 2>&1
-if not errorlevel 1 goto :py_ok
-echo       Instalando iqoptionapi desde GitHub (tarda un poco)...
-python -m pip uninstall -y iqoptionapi >nul 2>&1
-python -m pip install --disable-pip-version-check https://github.com/iqoptionapi/iqoptionapi/archive/refs/heads/master.zip
+echo       - iqoptionapi (desde GitHub)...
+python -m pip install --disable-pip-version-check --upgrade --force-reinstall --no-deps https://github.com/iqoptionapi/iqoptionapi/archive/refs/heads/master.zip
 if errorlevel 1 goto :error_pip
+
+echo       - websocket-client 0.56 (version exacta que necesita)...
+python -m pip install --disable-pip-version-check "websocket-client==0.56"
+if errorlevel 1 goto :error_pip
+
 python -c "from iqoptionapi.stable_api import IQ_Option" >nul 2>&1
 if errorlevel 1 goto :error_py
-:py_ok
+
+python -c "import websocket,sys; sys.exit(0 if websocket.__version__.startswith('0.5') else 1)" >nul 2>&1
+if errorlevel 1 goto :error_ws
+
 echo       OK
 echo.
 
@@ -110,6 +117,8 @@ if not exist "mini-services\iqoption-service\node_modules\.bin\tsx.cmd" set PROB
 if not exist "mini-services\autotrader-service\node_modules\.bin\tsx.cmd" set PROBLEMAS=1
 if not exist "prisma\db\custom.db" set PROBLEMAS=1
 python -c "from iqoptionapi.stable_api import IQ_Option" >nul 2>&1
+if errorlevel 1 set PROBLEMAS=1
+python -c "import websocket,sys; sys.exit(0 if websocket.__version__.startswith('0.5') else 1)" >nul 2>&1
 if errorlevel 1 set PROBLEMAS=1
 
 echo.
@@ -161,7 +170,18 @@ exit /b 1
 :error_py
 echo.
 echo [ERROR] Se instalo la libreria pero Python no la puede importar.
-echo Prueba a cerrar todas las ventanas y ejecutar reparar.bat otra vez.
+echo Cierra todas las ventanas y ejecuta reparar.bat otra vez.
+echo.
+pause
+exit /b 1
+
+:error_ws
+echo.
+echo [ERROR] No se pudo dejar websocket-client en la version 0.56.
+echo.
+echo La libreria de IQ Option solo funciona con esa version exacta.
+echo Pruebalo a mano en esta misma ventana:
+echo   python -m pip install "websocket-client==0.56"
 echo.
 pause
 exit /b 1
