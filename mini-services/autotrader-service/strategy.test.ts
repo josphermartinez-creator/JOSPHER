@@ -7,7 +7,7 @@
  * vela, que descarte la vela en formación y que use la configuración guardada.
  */
 
-import { detectSignal, estados, parseConfig, DEFAULT_STRATEGY_CONFIG, type Candle } from './strategy';
+import { detectSignal, velasCerradas, estados, parseConfig, DEFAULT_STRATEGY_CONFIG, type Candle } from './strategy';
 
 let fallos = 0;
 let pasadas = 0;
@@ -20,7 +20,25 @@ function check(nombre: string, ok: boolean, detalle = '') {
 // ------------------------------------------------------------
 // Serie con patrón completo: impulso bajista + doji verde + fuerza verde
 // ------------------------------------------------------------
-const T0 = 1_700_000_000;
+// Base alineada al minuto exacto (1_700_000_040 % 60 === 0).
+const T0 = 1_700_000_040;
+
+// La serie tiene 47 velas: 44 de impulso + doji + fuerza + la que se está
+// formando. AHORA es 400 ms despues de abrirse esa ultima, que es justo el
+// instante en que el bot despierta cada minuto.
+const VELAS_EN_SERIE = 47;
+const AHORA_MS = (T0 + (VELAS_EN_SERIE - 1) * 60) * 1000 + 400;
+
+/** Igual que llamar a detectSignal desde el bot en el instante AHORA_MS. */
+function detectar(
+  pair: string,
+  velas: Candle[],
+  config = DEFAULT_STRATEGY_CONFIG,
+  onLog?: any,
+  ahoraMs = AHORA_MS,
+) {
+  return detectSignal(pair, velas, config, onLog ?? (() => {}), 60, ahoraMs);
+}
 
 function construirSerie(): Candle[] {
   const velas: Candle[] = [];
@@ -60,7 +78,7 @@ console.log('\n== 1. Detecta el patrón sobre velas del broker ==');
 {
   estados.clear();
   const velas = construirSerie();
-  const s = detectSignal('PAR-A', velas);
+  const s = detectar('PAR-A', velas);
   check('da señal', s !== null);
   check('la dirección es COMPRA (a favor de la vela de fuerza verde)',
     s?.direction === 'CALL', s?.direction);
@@ -75,7 +93,7 @@ console.log('\n== 2. La vela en formación no cuenta ==');
   const velas = construirSerie();
   // Si NO se descartara la última, la "vela de fuerza" sería la vela en
   // formación y no habría patrón.
-  const s = detectSignal('PAR-B', velas);
+  const s = detectar('PAR-B', velas);
   check('se analiza la última vela CERRADA', s !== null);
   check('queda registrada la vela cerrada, no la que se está formando',
     estados.get('PAR-B')?.ultimaVelaProcesada === velas[velas.length - 2].time);
@@ -85,8 +103,8 @@ console.log('\n== 3. La misma vela no se analiza dos veces ==');
 {
   estados.clear();
   const velas = construirSerie();
-  const primera = detectSignal('PAR-C', velas);
-  const repetida = detectSignal('PAR-C', velas);
+  const primera = detectar('PAR-C', velas);
+  const repetida = detectar('PAR-C', velas);
   check('la primera pasada da señal', primera !== null);
   check('repetir las mismas velas no vuelve a disparar', repetida === null);
 }
@@ -95,8 +113,8 @@ console.log('\n== 4. Cada par lleva su propia cuenta ==');
 {
   estados.clear();
   const velas = construirSerie();
-  const a = detectSignal('PAR-D', velas);
-  const b = detectSignal('PAR-E', velas);
+  const a = detectar('PAR-D', velas);
+  const b = detectar('PAR-E', velas);
   check('el par D da señal', a !== null);
   check('el par E también, no se pisan', b !== null);
   check('cada uno guarda su estado', estados.size === 2, String(estados.size));
@@ -113,11 +131,11 @@ console.log('\n== 5. Se usa la configuración guardada ==');
   check('y mantiene los de fábrica que no se tocaron',
     config.impulseMinCandles === DEFAULT_STRATEGY_CONFIG.impulseMinCandles);
 
-  const s = detectSignal('PAR-F', velas, config);
+  const s = detectar('PAR-F', velas, config);
   check('con la confianza mínima al 99% no entra', s === null);
 
   estados.clear();
-  const s2 = detectSignal('PAR-F', velas, parseConfig('{}'));
+  const s2 = detectar('PAR-F', velas, parseConfig('{}'));
   check('con la configuración de fábrica sí entra', s2 !== null);
 
   check('una configuración corrupta no rompe nada',
@@ -134,9 +152,77 @@ console.log('\n== 6. Se avisa del motivo cuando no hay entrada ==');
     plano.push({ time: t, open: 1.1, high: 1.1001, low: 1.0999, close: 1.1, volume: 100 });
     t += 60;
   }
-  const s = detectSignal('PAR-G', plano, DEFAULT_STRATEGY_CONFIG, (_t, m) => logs.push(m));
+  const s = detectar('PAR-G', plano, DEFAULT_STRATEGY_CONFIG, (_t: string, m: string) => logs.push(m), (T0 + 49 * 60) * 1000 + 400);
   check('en mercado plano no entra', s === null);
   check('y deja escrito por qué', logs.length === 1 && logs[0].includes('lateral'), logs.join(' | '));
+}
+
+console.log('\n== 7. Entra en la vela correcta, no un minuto tarde ==');
+{
+  // Esto es lo que le pasó al usuario. El broker devolvió SOLO velas cerradas,
+  // sin la que se está formando. El código anterior tiraba siempre la última
+  // ("total, es la que está en curso"), así que se comía la VELA DE FUERZA: el
+  // patrón se completaba un minuto más tarde y la entrada caía una vela después
+  // de la que toca.
+  const serie = construirSerie();
+  const soloCerradas = serie.slice(0, -1);
+  const fuerza = soloCerradas[soloCerradas.length - 1];
+
+  const cerradas = velasCerradas(soloCerradas, 60, AHORA_MS);
+  check('la vela de fuerza cuenta como cerrada',
+    cerradas[cerradas.length - 1].time === fuerza.time);
+
+  estados.clear();
+  const s = detectar('PAR-H', soloCerradas);
+  check('entra en la vela de continuidad, la de justo después de la fuerza', s !== null);
+  check('el precio de referencia es el cierre de la vela de fuerza',
+    s?.entryPrice === fuerza.close, String(s?.entryPrice));
+
+  // El criterio viejo, hecho a mano: tirar la última pase lo que pase
+  estados.clear();
+  const comoAntes = detectar('PAR-I', soloCerradas.slice(0, -1));
+  check('con el criterio viejo (tirar la última siempre) aquí NO habría entrado',
+    comoAntes === null);
+
+  // La vela en formación se sigue descartando cuando el broker sí la manda
+  const conFormacion = velasCerradas(serie, 60, AHORA_MS);
+  check('la vela en formación se sigue quedando fuera',
+    conFormacion.length === serie.length - 1 &&
+    conFormacion[conFormacion.length - 1].time === fuerza.time);
+
+  // Un minuto más tarde el patrón ya no está en la última cerrada: no repite
+  estados.clear();
+  const tarde = detectar('PAR-J', serie, DEFAULT_STRATEGY_CONFIG, undefined, AHORA_MS + 60_000);
+  check('un minuto después ya no entra (no duplica la entrada)', tarde === null);
+
+  // Desfase de reloj: el PC atrasado 3s no puede hacerle perder la entrada
+  estados.clear();
+  const desfase = detectar('PAR-K', soloCerradas, DEFAULT_STRATEGY_CONFIG, undefined, AHORA_MS - 3000);
+  check('con el reloj del PC 3s atrasado sigue entrando a tiempo', desfase !== null);
+}
+
+console.log('\n== 8. El caso exacto de la foto, minuto a minuto ==');
+{
+  // serie = [ ...impulso bajista, doji verde, VELA DE FUERZA, continuidad ]
+  const serie = construirSerie();
+  const hastaFuerza = serie.slice(0, -1);   // lo que manda el broker en el minuto 1
+  const hastaContinuidad = serie;           // lo que manda en el minuto 2
+  const MIN1 = AHORA_MS;                    // 400 ms tras abrirse la vela de continuidad
+  const MIN2 = AHORA_MS + 60_000;           // un minuto mas tarde
+
+  // --- Comportamiento de AHORA ---
+  estados.clear();
+  const ahora1 = detectar('AHORA', hastaFuerza, DEFAULT_STRATEGY_CONFIG, undefined, MIN1);
+  const ahora2 = detectar('AHORA', hastaContinuidad, DEFAULT_STRATEGY_CONFIG, undefined, MIN2);
+  check('minuto 1, nada más cerrar la vela de fuerza: ENTRA (flecha azul)', ahora1 !== null);
+  check('minuto 2: no vuelve a entrar', ahora2 === null);
+
+  // --- Comportamiento de ANTES: tirar siempre la última vela recibida ---
+  estados.clear();
+  const antes1 = detectar('ANTES', hastaFuerza.slice(0, -1), DEFAULT_STRATEGY_CONFIG, undefined, MIN1);
+  const antes2 = detectar('ANTES', hastaContinuidad.slice(0, -1), DEFAULT_STRATEGY_CONFIG, undefined, MIN2);
+  check('antes, en el minuto 1 NO entraba: se comía la vela de fuerza', antes1 === null);
+  check('antes, entraba en el minuto 2, una vela tarde (flecha amarilla)', antes2 !== null);
 }
 
 console.log(`\n${pasadas} pruebas correctas, ${fallos} fallidas\n`);

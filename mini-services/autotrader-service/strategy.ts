@@ -67,20 +67,48 @@ export function getEstado(pair: string): EstadoPar {
 }
 
 /**
+ * Separa las velas YA CERRADAS de la que aún se está formando.
+ *
+ * Antes se hacía `candles.slice(0, -1)`: se daba por hecho que la última vela
+ * que manda el broker es siempre la que está en curso. NO es así. IQ Option
+ * decide qué devuelve según el instante exacto de la petición, y cuando la
+ * última que manda ya está cerrada, ese slice se comía la vela de fuerza. El
+ * patrón se completaba entonces un minuto más tarde y la entrada caía una vela
+ * después de la que toca.
+ *
+ * Ahora se mira la hora de cada vela, que no depende de la posición: una vela
+ * está cerrada cuando su hora de inicio más su duración ya pasó.
+ *
+ * El margen de 5 segundos absorbe el desfase entre el reloj del PC y el del
+ * broker. Es seguro: a la vela en formación le faltan todavía ~55 segundos
+ * para cerrar, así que ningún margen pequeño puede colarla por error.
+ */
+export function velasCerradas(
+  candles: Candle[],
+  timeframeSeg = 60,
+  ahoraMs: number = Date.now(),
+): Candle[] {
+  const limite = Math.floor(ahoraMs / 1000) + 5;
+  return candles.filter(
+    c => Number.isFinite(c.time) && c.time + timeframeSeg <= limite,
+  );
+}
+
+/**
  * Analiza el par y devuelve señal si el patrón completo se cumple en la última
  * vela cerrada.
- *
- * `candles` viene del broker con la última vela AÚN EN FORMACIÓN: se descarta.
  */
 export function detectSignal(
   pair: string,
   candles: Candle[],
   config: StrategyConfig = DEFAULT_STRATEGY_CONFIG,
   onLog: LogFn = () => {},
+  timeframeSeg = 60,
+  ahoraMs: number = Date.now(),
 ): Signal | null {
-  if (candles.length < 5) return null;
+  const cerradas = velasCerradas(candles, timeframeSeg, ahoraMs);
+  if (cerradas.length < 5) return null;
 
-  const cerradas = candles.slice(0, -1);
   const ultima = cerradas[cerradas.length - 1];
   const estado = getEstado(pair);
 

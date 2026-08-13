@@ -332,12 +332,14 @@ async function abrirOperacion(
   }
 
   // 1) Orden al broker. Sin confirmacion, no se registra NADA.
+  const tEnvio = Date.now();
   const order = await iqRequest<any>('place-order', {
     pair,
     direction: signal.direction,
     amount,
     expiration: expiry * 60,
   }, 25000);
+  const tardanza = Date.now() - tEnvio;
 
   if (!order?.success || !order.orderId) {
     return { ok: false, error: order?.error || 'El broker rechazo la orden' };
@@ -397,7 +399,16 @@ async function abrirOperacion(
   stats.totalOperations++;
   stats.lastOperation = { pair, direction: signal.direction, amount, time: new Date().toISOString() };
 
-  log('SUCCESS', `Orden REAL ${origen}: ${pair} ${signal.direction} $${amount} (broker ID ${order.orderId})`, pair);
+  // El segundo exacto en que el broker acepto la orden. Es el dato que dice si
+  // la entrada cayo donde tenia que caer dentro de la vela de continuidad.
+  const segundoEntrada = new Date().getSeconds();
+  log(
+    'SUCCESS',
+    `Orden REAL ${origen}: ${pair} ${signal.direction} $${amount} ` +
+    `en el segundo :${String(segundoEntrada).padStart(2, '0')} ` +
+    `(el broker tardo ${tardanza} ms) - ID ${order.orderId}`,
+    pair,
+  );
   io.emit('operation-opened', {
     pair,
     direction: signal.direction,
@@ -525,6 +536,19 @@ async function resolverPendientes() {
 setInterval(() => { resolverPendientes().catch(e => console.error('[AutoTrader] resolver:', e)); }, RESOLVE_INTERVAL_MS);
 
 // ====== Ciclo de analisis ======
+/**
+ * El minuto esta partido en dos:
+ *
+ *   segundo :50  PREPARACION  - todo lo lento (configuracion, limites de
+ *                riesgo, resumen del dia). Sobran 10 segundos.
+ *   segundo :00  ENTRADA      - solo velas, evaluacion y orden.
+ *
+ * Antes todo iba junto DESPUES del :00: dos llamadas a la app (una de ellas
+ * leyendo hasta 500 operaciones de la base de datos) y solo entonces se pedian
+ * las velas. Para cuando la orden salia hacia el broker se habian ido varios
+ * segundos de la vela de continuidad.
+ */
+const SEGUNDO_PREPARACION = 50;
 
 /** Espera al inicio exacto del proximo minuto (la vela de continuidad). */
 function esperarProximaVela(): Promise<void> {
@@ -532,6 +556,16 @@ function esperarProximaVela(): Promise<void> {
   const msAlMinuto = 60_000 - (now % 60_000);
   // 400 ms de margen para que el broker tenga la vela anterior ya cerrada
   return sleep(msAlMinuto + 400);
+}
+
+/** Espera al segundo indicado del minuto (al del proximo minuto si ya paso). */
+function esperarSegundo(seg: number): Promise<void> {
+  const dentroDelMinuto = Date.now() % 60_000;
+  const objetivo = seg * 1000;
+  const espera = objetivo > dentroDelMinuto
+    ? objetivo - dentroDelMinuto
+    : 60_000 - dentroDelMinuto + objetivo;
+  return sleep(espera);
 }
 
 async function detenerBot(motivo: string) {
@@ -542,22 +576,31 @@ async function detenerBot(motivo: string) {
   io.emit('bot-stopped', { reason: motivo });
 }
 
-async function ciclo(): Promise<void> {
+interface Preparacion {
+  settings: any;
+  pairs: string[];
+  quedanOps: number;
+  maxDailyOps: number;
+  strategyConfig: ReturnType<typeof parseConfig>;
+}
+
+/** Parte LENTA del minuto. Se ejecuta sobre el segundo :50, nunca en la entrada. */
+async function prepararCiclo(): Promise<Preparacion | null> {
   const configData = await getSettings(true);
   if (!configData) {
     log('WARNING', 'No se pudo leer la configuracion de la app, reintentando');
-    return;
+    return null;
   }
 
   const { account, settings } = configData;
 
   if (!account?.isConnected) {
     await detenerBot('la cuenta no esta conectada al broker');
-    return;
+    return null;
   }
   if (!settings?.botActive) {
     await detenerBot('el bot se desactivo desde la app');
-    return;
+    return null;
   }
 
   // Pares configurados
@@ -569,7 +612,7 @@ async function ciclo(): Promise<void> {
 
   if (pairs.length === 0) {
     log('WARNING', 'No hay pares seleccionados. Elige al menos uno en la pestaña Pares.');
-    return;
+    return null;
   }
 
   const pairsToCheck = pairs.slice(0, MAX_PAIRS);
@@ -581,7 +624,7 @@ async function ciclo(): Promise<void> {
   const bloqueo = comprobarLimites(settings, dia);
   if (bloqueo) {
     await detenerBot(bloqueo);
-    return;
+    return null;
   }
 
   const maxDailyOps = Number(settings?.maxDailyOperations) || 20;
@@ -602,26 +645,54 @@ async function ciclo(): Promise<void> {
 
   if (quedanOps <= 0) {
     log('WARNING', `Limite diario alcanzado (${dia.operaciones}/${maxDailyOps} operaciones)`);
-    return;
+    return null;
   }
 
-  // Velas de todos los pares EN PARALELO: antes se pedian de una en una y el
-  // barrido no cabia en la ventana de entrada.
-  const resultados = await Promise.all(
-    pairsToCheck.map(async (pair) => ({ pair, candles: await getRealCandles(pair, 80) })),
-  );
+  return {
+    settings,
+    pairs: pairsToCheck,
+    quedanOps,
+    maxDailyOps,
+    // Los parametros del panel llegan AHORA a la estrategia. Antes se leia solo
+    // minConfidence y los otros ocho ajustes no salian de la base de datos.
+    strategyConfig: parseConfig(settings.strategyConfig),
+  };
+}
 
-  // Los parametros del panel llegan AHORA a la estrategia. Antes se leia solo
-  // minConfidence y los otros ocho ajustes no salian de la base de datos.
-  const strategyConfig = parseConfig(settings.strategyConfig);
+/**
+ * Parte RAPIDA del minuto: velas, evaluacion y orden. Nada mas.
+ *
+ * Va par por par, no todos a la vez, y es a proposito: el puente Python atiende
+ * al broker de uno en uno (un candado protege el estado interno de la libreria,
+ * que es compartido). Pedir diez pares a la vez no acelera nada — se encolan
+ * igual — y ademas deja la ORDEN esperando detras de nueve peticiones de velas.
+ * Yendo de uno en uno, cuando hay que entrar como mucho hay una peticion por
+ * delante.
+ *
+ * El orden de los pares rota cada minuto para que el ultimo de la lista no sea
+ * siempre el que llega tarde a la ventana.
+ */
+async function ventanaEntrada(prep: Preparacion): Promise<void> {
+  const { settings, strategyConfig, quedanOps, maxDailyOps } = prep;
+
+  const minuto = Math.floor(Date.now() / 60_000);
+  const desde = prep.pairs.length ? minuto % prep.pairs.length : 0;
+  const orden = [...prep.pairs.slice(desde), ...prep.pairs.slice(0, desde)];
 
   let abiertasEsteCiclo = 0;
 
-  for (const { pair, candles } of resultados) {
+  for (const pair of orden) {
     if (!botActive) break;
-    if (!candles) continue;
+
+    if (abiertasEsteCiclo >= quedanOps) {
+      log('WARNING', `Limite diario alcanzado durante el ciclo (${maxDailyOps})`);
+      break;
+    }
 
     try {
+      const candles = await getRealCandles(pair, 80);
+      if (!candles) continue;
+
       const signal = detectSignal(pair, candles, strategyConfig, log);
       if (!signal) continue;
 
@@ -648,11 +719,6 @@ async function ciclo(): Promise<void> {
         continue;
       }
 
-      if (abiertasEsteCiclo >= quedanOps) {
-        log('WARNING', `Limite diario alcanzado durante el ciclo (${maxDailyOps})`);
-        break;
-      }
-
       const res = await abrirOperacion(pair, signal, settings, 'AUTO');
       if (res.ok) {
         abiertasEsteCiclo++;
@@ -660,7 +726,7 @@ async function ciclo(): Promise<void> {
         log('ERROR', `${pair}: no se pudo abrir la operacion - ${res.error}`, pair);
       }
     } catch (e: any) {
-      // Un fallo en un par no puede tumbar el bucle entero
+      // Un fallo en un par no puede tumbar el barrido entero
       log('ERROR', `${pair}: error inesperado - ${e.message}`, pair);
     }
   }
@@ -672,16 +738,39 @@ async function monitorLoop(myRunId: number) {
 
   try {
     while (botActive && myRunId === runId) {
-      await esperarProximaVela();
+      // --- Segundo :50: preparacion (lo lento) ---
+      await esperarSegundo(SEGUNDO_PREPARACION);
       if (!botActive || myRunId !== runId) break;
 
+      let prep: Preparacion | null = null;
+      const minutoAntes = Math.floor(Date.now() / 60_000);
       try {
-        await ciclo();
+        prep = await prepararCiclo();
       } catch (e: any) {
         // El bucle NUNCA muere por una excepcion: antes cualquier fallo de red
         // lo mataba y el panel seguia diciendo "EN VIVO".
         stats.lastError = e.message;
-        log('ERROR', `Error en el ciclo: ${e.message}. Se reintenta en el proximo minuto.`);
+        log('ERROR', `Error preparando el ciclo: ${e.message}. Se reintenta en el proximo minuto.`);
+      }
+
+      if (prep && Math.floor(Date.now() / 60_000) !== minutoAntes) {
+        // La preparacion se comio el cambio de minuto: entrar ahora seria
+        // entrar tarde. Mejor perder esta vela que operar fuera de tiempo.
+        log('WARNING', 'La preparacion tardo mas de 10s y se perdio la entrada de este minuto');
+        prep = null;
+      }
+
+      // --- Segundo :00: ventana de entrada (lo rapido) ---
+      await esperarProximaVela();
+      if (!botActive || myRunId !== runId) break;
+
+      if (!prep) continue;
+
+      try {
+        await ventanaEntrada(prep);
+      } catch (e: any) {
+        stats.lastError = e.message;
+        log('ERROR', `Error en la ventana de entrada: ${e.message}. Se reintenta en el proximo minuto.`);
       }
     }
   } finally {

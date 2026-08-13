@@ -134,15 +134,25 @@ def _esperar_respuesta(leer, limite=25.0, paso=0.05):
     la vez), bloquea al resto del puente hasta 30 segundos. Mientras tanto la
     comprobacion de salud no llegaba a responder y el bot creia que el puente
     se habia caido o que se habia perdido la conexion con el broker.
+
+    La pausa arranca en 2 ms y va creciendo hasta `paso`. Importa: el broker
+    suele contestar en decimas, y con una pausa fija de 50 ms se perdian hasta
+    50 ms en cada peticion. Con dos peticiones por entrada (velas y orden) eso
+    es un decimo de segundo regalado justo en el momento de entrar al mercado.
+    Pasado el primer medio segundo ya se espera con calma, para no calentar el
+    procesador en las esperas largas (login, lista de activos).
     """
     inicio = time.time()
+    espera = 0.002
     while True:
         valor = leer()
         if valor is not None:
             return valor
         if time.time() - inicio > limite:
             return None
-        time.sleep(paso)
+        time.sleep(espera)
+        if espera < paso:
+            espera = min(paso, espera * 1.6)
 
 
 def _pedir_init_v2(limite=25.0):
