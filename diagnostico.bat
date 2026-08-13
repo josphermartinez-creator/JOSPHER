@@ -125,12 +125,13 @@ if exist "prisma\db\custom.db" (
 echo.
 
 echo [10] Puente Python (puerto 5005)
-curl -s --max-time 3 http://localhost:5005/health >nul 2>&1
+:: --noproxy: si hay VPN, la llamada a localhost no debe salir por el proxy.
+curl -s --noproxy "*" --max-time 3 http://localhost:5005/health >nul 2>&1
 if errorlevel 1 (
     echo     [PARADO] Arranca con arrancar.bat
 ) else (
     echo     [OK] responde
-    curl -s --max-time 3 http://localhost:5005/health
+    curl -s --noproxy "*" --max-time 3 http://localhost:5005/health
     echo.
 )
 echo.

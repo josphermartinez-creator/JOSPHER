@@ -4,6 +4,17 @@ title Quantum Bot - Iniciando...
 color 0B
 cd /d "%~dp0"
 
+:: ------------------------------------------------------------------
+:: Proxy / VPN
+:: Las piezas del bot se hablan entre ellas por localhost (3000, 3003,
+:: 3004, 5005). Si hay una VPN con proxy en las variables de entorno, esas
+:: llamadas internas intentan salir por el proxy y fallan: el arranque
+:: decia "el puente aun no responde" aunque el puente estuviera perfecto.
+:: Aqui solo se excluye localhost; la conexion al broker no se toca.
+:: ------------------------------------------------------------------
+set "NO_PROXY=localhost,127.0.0.1,::1"
+set "no_proxy=localhost,127.0.0.1,::1"
+
 echo.
 echo ============================================================
 echo   QUANTUM BOT - ARRANCANDO
@@ -46,7 +57,7 @@ echo [3/6] Esperando al puente Python...
 set BRIDGE_OK=0
 for /l %%i in (1,1,20) do (
     if !BRIDGE_OK!==0 (
-        curl -s --max-time 2 http://localhost:5005/health >nul 2>&1
+        curl -s --noproxy "*" --max-time 2 http://localhost:5005/health >nul 2>&1
         if !errorlevel!==0 (
             set BRIDGE_OK=1
         ) else (
