@@ -25,11 +25,9 @@ interface StrategyPanelProps {
   onSettingsUpdate: () => void;
 }
 
-const PAIRS = [
-  'EURUSD-OTC', 'GBPUSD-OTC', 'USDJPY-OTC', 'AUDUSD-OTC', 'EURGBP-OTC',
-  'BTCUSD-OTC', 'ETHUSD-OTC', 'XAUUSD-OTC', 'AUDCAD-OTC',
-  'EURUSD', 'GBPUSD', 'USDJPY', 'BTCUSD',
-];
+// Respaldo mientras llega la lista real del broker. La lista anterior tenía
+// pares que no existen en IQ Option (AUDUSD-OTC, BTCUSD-OTC, XAUUSD-OTC...).
+const PAIRS_FALLBACK = ['EURUSD-OTC', 'GBPUSD-OTC', 'USDJPY-OTC', 'EURGBP-OTC', 'EURUSD', 'GBPUSD'];
 
 export function StrategyPanel({ settings, onSettingsUpdate }: StrategyPanelProps) {
   // Inicializar el par desde settings o localStorage para persistencia
@@ -49,6 +47,7 @@ export function StrategyPanel({ settings, onSettingsUpdate }: StrategyPanelProps
   };
 
   const [data, setData] = useState<any>(null);
+  const [pairs, setPairs] = useState<string[]>(PAIRS_FALLBACK);
   const [loading, setLoading] = useState(true);
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [executing, setExecuting] = useState(false);
@@ -110,6 +109,20 @@ export function StrategyPanel({ settings, onSettingsUpdate }: StrategyPanelProps
   useEffect(() => {
     load();
   }, [load]);
+
+  // Pares reales del broker (solo los que están abiertos ahora)
+  useEffect(() => {
+    fetch('/api/pairs')
+      .then(r => r.json())
+      .then(d => {
+        if (!d.success || !Array.isArray(d.pairs)) return;
+        const abiertos = d.source === 'broker'
+          ? d.pairs.filter((p: any) => p.available)
+          : d.pairs;
+        if (abiertos.length > 0) setPairs(abiertos.map((p: any) => p.id));
+      })
+      .catch(() => {});
+  }, []);
 
   // Auto-refresh cada 60 segundos (1 vela M1)
   useEffect(() => {
@@ -209,7 +222,7 @@ export function StrategyPanel({ settings, onSettingsUpdate }: StrategyPanelProps
           <Select value={pair} onValueChange={handlePairChange}>
             <SelectTrigger className="w-36 h-9 text-xs"><SelectValue /></SelectTrigger>
             <SelectContent>
-              {PAIRS.map(p => <SelectItem key={p} value={p}>{p}</SelectItem>)}
+              {pairs.map(p => <SelectItem key={p} value={p}>{p}</SelectItem>)}
             </SelectContent>
           </Select>
           <Button
@@ -287,51 +300,93 @@ export function StrategyPanel({ settings, onSettingsUpdate }: StrategyPanelProps
               </div>
               <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
                 <ConfigSlider
+                  label="Impulso: velas mínimas"
+                  value={config.impulseMinCandles ?? 4}
+                  onChange={(v) => updateConfig('impulseMinCandles', v)}
+                  min={2} max={10} step={1}
+                  hint="La regla pide 4"
+                />
+                <ConfigSlider
+                  label="Impulso: velas máximas"
+                  value={config.impulseMaxCandles ?? 12}
+                  onChange={(v) => updateConfig('impulseMaxCandles', v)}
+                  min={4} max={25} step={1}
+                  hint="Hasta dónde se mira atrás (4, 5, 6 o más)"
+                />
+                <ConfigSlider
+                  label="Impulso: retroceso máximo (%)"
+                  value={config.impulseMaxPullbackPct ?? 45}
+                  onChange={(v) => updateConfig('impulseMaxPullbackPct', v)}
+                  min={10} max={80} step={5}
+                  hint="Cuánto puede corregir sin cambiar el impulso"
+                />
+                <ConfigSlider
+                  label="Impulso: avance mínimo (ATR)"
+                  value={config.impulseMinAdvanceATR ?? 1.2}
+                  onChange={(v) => updateConfig('impulseMinAdvanceATR', v)}
+                  min={0.4} max={4} step={0.1}
+                  hint="Recorrido mínimo, medido en volatilidad"
+                />
+                <ConfigSlider
+                  label="Impulso: cola máxima (%)"
+                  value={config.impulseMaxTailPct ?? 15}
+                  onChange={(v) => updateConfig('impulseMaxTailPct', v)}
+                  min={5} max={50} step={5}
+                  hint="El impulso debe llegar vivo al doji"
+                />
+                <ConfigSlider
                   label="Doji: cuerpo máximo (%)"
-                  value={config.dojiMaxBodyPct ?? 15}
+                  value={config.dojiMaxBodyPct ?? 20}
                   onChange={(v) => updateConfig('dojiMaxBodyPct', v)}
-                  min={5} max={30} step={1}
-                  hint="Cuerpo debe ser ≤ este % del rango"
+                  min={5} max={40} step={1}
+                  hint="Cuerpo ≤ este % de su rango"
                 />
                 <ConfigSlider
                   label="Doji: mecha mínima (%)"
-                  value={config.dojiMinWickBothSides ?? 15}
+                  value={config.dojiMinWickBothSides ?? 10}
                   onChange={(v) => updateConfig('dojiMinWickBothSides', v)}
-                  min={5} max={40} step={1}
+                  min={2} max={40} step={1}
                   hint="Cada mecha ≥ este % del rango"
                 />
                 <ConfigSlider
-                  label="Impulso: velas mínimas"
-                  value={config.impulseMinCandles ?? 3}
-                  onChange={(v) => updateConfig('impulseMinCandles', v)}
-                  min={2} max={10} step={1}
-                  hint="Velas mínimas del impulso"
-                />
-                <ConfigSlider
                   label="Fuerza: cuerpo mínimo (%)"
-                  value={config.forceMinBodyPct ?? 65}
+                  value={config.forceMinBodyPct ?? 50}
                   onChange={(v) => updateConfig('forceMinBodyPct', v)}
-                  min={50} max={80} step={1}
-                  hint="Cuerpo fuerza ≥ este % del doji"
+                  min={20} max={90} step={5}
+                  hint="Cuerpo ≥ este % de SU rango"
                 />
                 <ConfigSlider
-                  label="Fuerza: cuerpo máximo (%)"
-                  value={config.forceMaxBodyPct ?? 80}
-                  onChange={(v) => updateConfig('forceMaxBodyPct', v)}
-                  min={70} max={100} step={1}
-                  hint="Si excede = agotamiento"
+                  label="Fuerza: tamaño mínimo (ATR)"
+                  value={config.forceMinRangeATR ?? 0.8}
+                  onChange={(v) => updateConfig('forceMinRangeATR', v)}
+                  min={0} max={3} step={0.1}
+                  hint="&quot;Vela de buen tamaño&quot; frente al mercado"
                 />
                 <ConfigSlider
-                  label="Filtro lateral: lookback"
-                  value={config.lateralLookback ?? 14}
-                  onChange={(v) => updateConfig('lateralLookback', v)}
-                  min={5} max={30} step={1}
-                  hint="Velas para evaluar lateralidad"
+                  label="Velas entre doji y fuerza"
+                  value={config.maxCandlesDojiToForce ?? 1}
+                  onChange={(v) => updateConfig('maxCandlesDojiToForce', v)}
+                  min={1} max={4} step={1}
+                  hint="1 = la fuerza va justo detrás del doji"
+                />
+                <ConfigSlider
+                  label="ADX mínimo"
+                  value={config.adxMin ?? 25}
+                  onChange={(v) => updateConfig('adxMin', v)}
+                  min={10} max={50} step={1}
+                  hint="Por debajo se considera lateral"
+                />
+                <ConfigSlider
+                  label="Confianza mínima (%)"
+                  value={config.minConfidence ?? 65}
+                  onChange={(v) => updateConfig('minConfidence', v)}
+                  min={50} max={98} step={1}
+                  hint="Calidad mínima del patrón para entrar"
                 />
                 <div className="flex items-center justify-between p-3 rounded-xl bg-muted/30">
                   <div>
                     <div className="text-xs font-bold">Vela fuerza debe romper mecha</div>
-                    <div className="text-[10px] text-muted-foreground">Si no, validar solo cuerpo</div>
+                    <div className="text-[10px] text-muted-foreground">Sobrepasar la mecha del doji</div>
                   </div>
                   <Switch
                     checked={config.forceMustBreakWick ?? true}
@@ -340,22 +395,32 @@ export function StrategyPanel({ settings, onSettingsUpdate }: StrategyPanelProps
                 </div>
                 <div className="flex items-center justify-between p-3 rounded-xl bg-muted/30">
                   <div>
-                    <div className="text-xs font-bold">Filtro mercado lateral</div>
-                    <div className="text-[10px] text-muted-foreground">No operar en lateral</div>
+                    <div className="text-xs font-bold">Doji del color contrario</div>
+                    <div className="text-[10px] text-muted-foreground">Impulso bajista → doji verde</div>
                   </div>
                   <Switch
-                    checked={config.lateralFilterEnabled ?? true}
-                    onCheckedChange={(v) => updateConfig('lateralFilterEnabled', v)}
+                    checked={config.dojiOppositeColor ?? true}
+                    onCheckedChange={(v) => updateConfig('dojiOppositeColor', v)}
                   />
                 </div>
                 <div className="flex items-center justify-between p-3 rounded-xl bg-muted/30">
                   <div>
-                    <div className="text-xs font-bold">Alinear con tendencia</div>
-                    <div className="text-[10px] text-muted-foreground">Validar dirección impulso</div>
+                    <div className="text-xs font-bold">Fuerza del color del doji</div>
+                    <div className="text-[10px] text-muted-foreground">Doji verde → fuerza verde</div>
                   </div>
                   <Switch
-                    checked={config.requireTrendAlignment ?? true}
-                    onCheckedChange={(v) => updateConfig('requireTrendAlignment', v)}
+                    checked={config.forceSameColorAsDoji ?? true}
+                    onCheckedChange={(v) => updateConfig('forceSameColorAsDoji', v)}
+                  />
+                </div>
+                <div className="flex items-center justify-between p-3 rounded-xl bg-muted/30">
+                  <div>
+                    <div className="text-xs font-bold">Filtro mercado lateral</div>
+                    <div className="text-[10px] text-muted-foreground">No operar sin tendencia</div>
+                  </div>
+                  <Switch
+                    checked={config.lateralFilterEnabled ?? true}
+                    onCheckedChange={(v) => updateConfig('lateralFilterEnabled', v)}
                   />
                 </div>
               </div>
@@ -513,12 +578,17 @@ export function StrategyPanel({ settings, onSettingsUpdate }: StrategyPanelProps
           ) : (
             <div className="text-center py-8">
               <AlertCircle className="w-10 h-10 mx-auto mb-2 text-muted-foreground opacity-50" />
-              <p className="text-sm text-muted-foreground">
-                {data?.isLateral ? 'Mercado lateral - no hay señal válida' : 'No hay señal detectada'}
+              <p className="text-sm text-muted-foreground">No hay entrada ahora mismo</p>
+              {/* El motor dice exactamente qué regla no se cumple, para poder
+                  ajustar el parámetro correcto en vez de adivinar. */}
+              <p className="text-xs mt-2 max-w-md mx-auto text-muted-foreground">
+                {data?.lastRejection?.detalle || 'Esperando patrón: impulso → doji → vela de fuerza'}
               </p>
-              <p className="text-xs text-muted-foreground mt-1">
-                Esperando patrón: Impulso → Doji → Vela de Fuerza
-              </p>
+              {typeof data?.adx === 'number' && (
+                <p className="text-[10px] text-muted-foreground mt-2 font-mono">
+                  ADX {data.adx.toFixed(1)} · señales en el histórico: {data?.signals?.length ?? 0}
+                </p>
+              )}
             </div>
           )}
         </Card>

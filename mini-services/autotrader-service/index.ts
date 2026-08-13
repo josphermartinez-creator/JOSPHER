@@ -15,7 +15,7 @@
 import { io as ioClient } from 'socket.io-client';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
-import { detectSignal, estados, type Candle, type Signal } from './strategy';
+import { detectSignal, estados, parseConfig, type Candle, type Signal } from './strategy';
 
 const PORT = 3004;
 const APP_URL = process.env.APP_URL || 'http://localhost:3000';
@@ -26,6 +26,11 @@ const COOLDOWN_MS = 60_000;          // espera minima entre operaciones del mism
 const RESOLVE_INTERVAL_MS = 5_000;   // cada cuanto se preguntan resultados al broker
 const RESOLVE_GIVEUP_MS = 15 * 60_000;
 const SETTINGS_TTL_MS = 5_000;
+/**
+ * La regla dice: entrada en la vela de continuidad, del segundo :00 al :02.
+ * Pasado ese punto la entrada ya no vale, se deja pasar la vela.
+ */
+const VENTANA_ENTRADA_SEG = 2;
 
 // ====== Estado del bot ======
 let botActive = false;
@@ -606,13 +611,9 @@ async function ciclo(): Promise<void> {
     pairsToCheck.map(async (pair) => ({ pair, candles: await getRealCandles(pair, 80) })),
   );
 
-  const minConfidence = (() => {
-    try {
-      return Number(JSON.parse(settings.strategyConfig || '{}').minConfidence) || 65;
-    } catch {
-      return 65;
-    }
-  })();
+  // Los parametros del panel llegan AHORA a la estrategia. Antes se leia solo
+  // minConfidence y los otros ocho ajustes no salian de la base de datos.
+  const strategyConfig = parseConfig(settings.strategyConfig);
 
   let abiertasEsteCiclo = 0;
 
@@ -621,15 +622,18 @@ async function ciclo(): Promise<void> {
     if (!candles) continue;
 
     try {
-      const signal = detectSignal(pair, candles, log);
+      const signal = detectSignal(pair, candles, strategyConfig, log);
       if (!signal) continue;
 
       stats.totalSignals++;
       stats.lastSignal = { pair, ...signal, time: new Date().toISOString() };
       io.emit('signal-detected', { pair, signal });
 
-      if (signal.confidence < minConfidence) {
-        log('INFO', `${pair}: señal descartada, confianza ${signal.confidence}% < ${minConfidence}%`, pair);
+      // Ventana de entrada :00-:02. Si el analisis o la red se han demorado,
+      // la entrada llegaria tarde a la vela de continuidad: mejor no entrar.
+      const segundo = new Date().getSeconds();
+      if (segundo > VENTANA_ENTRADA_SEG) {
+        log('WARNING', `${pair}: señal descartada, fuera de la ventana de entrada (segundo :${String(segundo).padStart(2, '0')})`, pair);
         continue;
       }
 
@@ -742,7 +746,13 @@ io.on('connection', (socket) => {
       confidence: Number(data?.confidence) || 0,
       reason: data?.reason || 'Entrada manual',
       entryPrice: Number(data?.entryPrice) || 0,
-      pattern: null,
+      pattern: {
+        impulso: 'MANUAL',
+        velasImpulso: 0,
+        doji: 0,
+        fuerza: 0,
+        adx: 0,
+      },
     };
 
     const res = await abrirOperacion(

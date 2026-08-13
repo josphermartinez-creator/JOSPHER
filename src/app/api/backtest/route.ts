@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
-import { generateCandles } from '@/lib/candles';
 import { analyzeStrategy, DEFAULT_STRATEGY_CONFIG, type StrategyConfig } from '@/lib/strategy';
+import { IQ_SERVICE_URL, serviceRequest } from '@/lib/services';
 
 // GET /api/backtest - list backtests
 export async function GET() {
@@ -28,30 +28,38 @@ export async function POST(req: NextRequest) {
     const account = await db.account.findFirst();
     if (!account) return NextResponse.json({ success: false, error: 'Sin cuenta' }, { status: 404 });
 
-    await new Promise(resolve => setTimeout(resolve, 1500));
-
-    // Determinar número de velas según el periodo
+    // Velas REALES del broker. Antes se generaban con generateCandles(): el
+    // backtest medía la estrategia contra ruido aleatorio, no contra el mercado.
     const candleCounts: Record<string, number> = {
-      '7D': 200, '30D': 800, '90D': 2400, '180D': 4800, '1Y': 9600,
+      '7D': 300, '30D': 600, '90D': 1000, '180D': 1000, '1Y': 1000,
     };
-    const candleCount = candleCounts[period || '30D'] || 800;
+    const candleCount = candleCounts[period || '30D'] || 600;
+
+    const velasRes = await serviceRequest<any>(
+      IQ_SERVICE_URL,
+      'get-candles',
+      { pair, count: candleCount, timeframe: 60 },
+      40000,
+    );
+
+    if (!velasRes?.success || velasRes.source !== 'real' || !velasRes.candles?.length) {
+      return NextResponse.json({
+        success: false,
+        error: `No hay velas reales de ${pair} para el backtest: ${velasRes?.error || 'sin datos'}`,
+      }, { status: 503 });
+    }
+
+    const candles = velasRes.candles as any[];
 
     // Configuración de la estrategia (combinar default + config del request)
     const strategyConfig: StrategyConfig = { ...DEFAULT_STRATEGY_CONFIG, ...(config || {}) };
 
-    // Generar datos históricos
-    const startPrice = pair.includes('BTC') ? 60000 : pair.includes('ETH') ? 3000 : 1.0850;
-    const volatility = pair.includes('BTC') ? 80 : pair.includes('ETH') ? 8 : 0.0010;
-
-    const candles = generateCandles(candleCount, startPrice, { volatility, injectPatterns: true });
-
-    // Analizar estrategia
+    // Analizar estrategia (mismo motor que usa el bot en vivo)
     const result = analyzeStrategy(candles, strategyConfig);
 
-    // Convertir señales en operaciones simuladas
     const amount = (config?.amount || 25) as number;
     const payout = (config?.payout || 87) as number;
-    const minConfidence = (config?.minConfidence || 60) as number;
+    const minConfidence = (config?.minConfidence ?? strategyConfig.minConfidence) as number;
 
     const operations: any[] = [];
     let balance = 0;
@@ -63,12 +71,24 @@ export async function POST(req: NextRequest) {
     let longestWin = 0;
     let longestLoss = 0;
 
+    let draws = 0;
+
     for (const signal of result.signals) {
       if (signal.confidence < minConfidence) continue;
 
-      // Simular resultado basado en confianza (con algo de varianza realista)
-      const winProb = Math.min(0.85, signal.confidence / 100 * 0.8);
-      const isWin = Math.random() < winProb;
+      // Resultado REAL de una binaria de 1 minuto: se entra al abrir la vela de
+      // continuidad y se cierra al cerrarla. Antes esto era Math.random() con
+      // una probabilidad inventada a partir de la confianza, así que el
+      // backtest no medía nada.
+      const vela = candles[signal.index];
+      if (!vela) continue;
+
+      const subio = vela.close > vela.open;
+      const bajo = vela.close < vela.open;
+
+      if (!subio && !bajo) { draws++; continue; } // empate: el broker devuelve la apuesta
+
+      const isWin = signal.direction === 'CALL' ? subio : bajo;
       const profit = isWin ? amount * payout / 100 : -amount;
       runningBalance += profit;
 
@@ -92,7 +112,9 @@ export async function POST(req: NextRequest) {
         balance: runningBalance,
         direction: signal.direction,
         confidence: signal.confidence,
-        time: new Date(candles[signal.index].time).toISOString(),
+        time: new Date(Number(candles[signal.index].time) * 1000).toISOString(),
+        entryPrice: candles[signal.index].open,
+        exitPrice: candles[signal.index].close,
         reason: signal.reason,
       });
     }
@@ -117,7 +139,7 @@ export async function POST(req: NextRequest) {
         totalOperations: total,
         wins,
         losses,
-        draws: 0,
+        draws,
         winRate,
         profit,
         maxDrawdown,
@@ -134,6 +156,10 @@ export async function POST(req: NextRequest) {
       summary: {
         totalSignals: result.signals.length,
         filteredSignals: total,
+        draws,
+        candlesAnalyzed: candles.length,
+        dataSource: 'broker',
+        adx: Math.round(result.adx),
         lateralDetected: result.isLateral,
         lateralScore: result.lateralScore,
       }

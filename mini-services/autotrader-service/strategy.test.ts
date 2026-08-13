@@ -1,171 +1,141 @@
 /**
- * Pruebas de la estrategia.
+ * Pruebas del puente entre el bot y el motor de la estrategia.
  * Ejecutar:  npx tsx strategy.test.ts
  *
- * La prueba clave es la 2: dos pares analizados a la vez tienen que llevar su
- * propia secuencia. Con el estado global anterior era imposible.
+ * Las reglas de la estrategia se prueban en src/lib/ifc-strategy.test.ts.
+ * Aquí se comprueba lo que añade el bot: que no analice dos veces la misma
+ * vela, que descarte la vela en formación y que use la configuración guardada.
  */
 
-import { detectSignal, estados, type Candle } from './strategy';
+import { detectSignal, estados, parseConfig, DEFAULT_STRATEGY_CONFIG, type Candle } from './strategy';
 
 let fallos = 0;
 let pasadas = 0;
 
-function check(nombre: string, condicion: boolean, detalle = '') {
-  if (condicion) {
-    pasadas++;
-    console.log(`  OK   ${nombre}`);
-  } else {
-    fallos++;
-    console.log(`  FALLA ${nombre} ${detalle}`);
-  }
+function check(nombre: string, ok: boolean, detalle = '') {
+  if (ok) { pasadas++; console.log(`  OK    ${nombre}`); }
+  else { fallos++; console.log(`  FALLA ${nombre}${detalle ? ' :: ' + detalle : ''}`); }
 }
 
-const T0 = Math.floor(Date.now() / 1000) - 100 * 60;
-let seq = 0;
-const vela = (o: number, h: number, l: number, c: number): Candle => ({
-  time: T0 + (seq++) * 60,
-  open: o, high: h, low: l, close: c, volume: 100,
-});
+// ------------------------------------------------------------
+// Serie con patrón completo: impulso bajista + doji verde + fuerza verde
+// ------------------------------------------------------------
+const T0 = 1_700_000_000;
 
-/** Serie base con movimiento suficiente para que el ADX supere el umbral. */
-function serieTendencial(base: number, n: number, paso: number): Candle[] {
-  const out: Candle[] = [];
-  let p = base;
-  for (let i = 0; i < n; i++) {
-    const open = p;
-    const close = p + paso;
-    out.push(vela(open, Math.max(open, close) + paso * 0.1, Math.min(open, close) - paso * 0.1, close));
-    p = close;
-  }
-  return out;
-}
+function construirSerie(): Candle[] {
+  const velas: Candle[] = [];
+  let t = T0;
+  let p = 1.10;
+  const paso = 0.0010;
 
-/** Cuatro velas con maximos y minimos siempre subiendo: impulso ALCISTA. */
-function impulsoAlcista(desde: number): Candle[] {
-  const out: Candle[] = [];
-  let p = desde;
-  for (let i = 0; i < 4; i++) {
-    const open = p;
-    const close = p + 0.0010;
-    out.push(vela(open, close + 0.0002, open - 0.0001, close));
-    p = close;
-  }
-  return out;
-}
-
-/** Doji rojo: cuerpo < 20% del rango y mechas > 10% a ambos lados. */
-function dojiRojo(precio: number): Candle {
-  const rango = 0.0020;
-  const open = precio + 0.0002;
-  const close = precio;                       // rojo, cuerpo 0.0002 = 10% del rango
-  return vela(open, precio + 0.0010, precio - 0.0010, close);
-}
-
-/** Vela de fuerza para impulso alcista: roja y con minimo por debajo del doji. */
-function fuerzaBajista(precio: number, minimoDoji: number): Candle {
-  const open = precio;
-  const close = precio - 0.0015;
-  return vela(open, open + 0.0002, minimoDoji - 0.0005, close);
-}
-
-console.log('\n== 1. Sin patron no hay señal ==');
-{
-  estados.clear();
-  const base = serieTendencial(1.1, 30, 0.0008);
-  const s = detectSignal('TEST1', base);
-  check('serie limpia sin doji -> sin señal', s === null);
-}
-
-console.log('\n== 2. Dos pares a la vez mantienen secuencias independientes ==');
-{
-  estados.clear();
-  seq = 0;
-
-  const construir = (pair: string) => {
-    const historia = serieTendencial(1.1, 25, 0.0009);
-    const ultimo = historia[historia.length - 1].close;
-    const imp = impulsoAlcista(ultimo);
-    const trasImpulso = imp[imp.length - 1].close;
-    const doji = dojiRojo(trasImpulso);
-    const fuerza = fuerzaBajista(doji.close, doji.low);
-    const formandose = vela(fuerza.close, fuerza.close + 0.0003, fuerza.close - 0.0003, fuerza.close);
-    return { historia, imp, doji, fuerza, formandose };
+  const add = (o: number, h: number, l: number, c: number) => {
+    velas.push({ time: t, open: o, high: h, low: l, close: c, volume: 100 });
+    t += 60;
   };
 
-  const A = construir('PAR-A');
-  const B = construir('PAR-B');
-
-  // Fase 1 en ambos pares, alternando (esto es lo que rompia antes)
-  const paso1A = [...A.historia, ...A.imp, A.formandose];
-  const paso1B = [...B.historia, ...B.imp, B.formandose];
-  detectSignal('PAR-A', paso1A);
-  detectSignal('PAR-B', paso1B);
-
-  check('PAR-A guarda su impulso', estados.get('PAR-A')?.impulso === 'ALCISTA');
-  check('PAR-B guarda su impulso', estados.get('PAR-B')?.impulso === 'ALCISTA');
-
-  // Fase 2: llega el doji (una vela cerrada nueva en cada par)
-  const paso2A = [...A.historia, ...A.imp, A.doji, A.formandose];
-  const paso2B = [...B.historia, ...B.imp, B.doji, B.formandose];
-  detectSignal('PAR-A', paso2A);
-  detectSignal('PAR-B', paso2B);
-
-  check('PAR-A espera la vela de fuerza', estados.get('PAR-A')?.esperandoFuerza === true);
-  check('PAR-B espera la vela de fuerza', estados.get('PAR-B')?.esperandoFuerza === true);
-
-  // Fase 3: vela de fuerza -> señal en los dos
-  const paso3A = [...A.historia, ...A.imp, A.doji, A.fuerza, A.formandose];
-  const paso3B = [...B.historia, ...B.imp, B.doji, B.fuerza, B.formandose];
-  const sA = detectSignal('PAR-A', paso3A);
-  const sB = detectSignal('PAR-B', paso3B);
-
-  check('PAR-A da señal CALL', sA?.direction === 'CALL', JSON.stringify(sA));
-  check('PAR-B da señal CALL', sB?.direction === 'CALL', JSON.stringify(sB));
-  check('el estado de PAR-A se reinicia tras la señal', estados.get('PAR-A')?.impulso === null);
-}
-
-console.log('\n== 3. La misma vela no se procesa dos veces ==');
-{
-  estados.clear();
-  const historia = serieTendencial(1.1, 25, 0.0009);
-  const imp = impulsoAlcista(historia[historia.length - 1].close);
-  const doji = dojiRojo(imp[imp.length - 1].close);
-  const fuerza = fuerzaBajista(doji.close, doji.low);
-  const formandose = vela(fuerza.close, fuerza.close + 0.0003, fuerza.close - 0.0003, fuerza.close);
-  const serie = [...historia, ...imp, doji, fuerza, formandose];
-
-  detectSignal('PAR-C', [...historia, ...imp, formandose]);
-  detectSignal('PAR-C', [...historia, ...imp, doji, formandose]);
-  const primera = detectSignal('PAR-C', serie);
-  const repetida = detectSignal('PAR-C', serie); // mismas velas otra vez
-
-  check('la primera pasada da señal', primera !== null);
-  check('repetir la misma vela no vuelve a disparar', repetida === null);
-}
-
-console.log('\n== 4. La ultima vela (en formacion) se ignora ==');
-{
-  estados.clear();
-  const historia = serieTendencial(1.1, 25, 0.0009);
-  const imp = impulsoAlcista(historia[historia.length - 1].close);
-  const formandose = vela(imp[imp.length - 1].close, imp[imp.length - 1].close + 0.001, imp[imp.length - 1].close - 0.001, imp[imp.length - 1].close);
-  detectSignal('PAR-D', [...historia, ...imp, formandose]);
-  const e = estados.get('PAR-D');
-  check('el impulso se calcula solo con velas cerradas', e?.impulso === 'ALCISTA');
-  check('se recuerda la ultima vela cerrada', e?.ultimaVelaProcesada === imp[imp.length - 1].time);
-}
-
-console.log('\n== 5. Mercado lateral reinicia el patron ==');
-{
-  estados.clear();
-  const plano: Candle[] = [];
-  for (let i = 0; i < 30; i++) {
-    plano.push(vela(1.1, 1.1001, 1.0999, 1.1));
+  // 44 velas bajistas: tendencia clara para que el ADX suba
+  for (let i = 0; i < 44; i++) {
+    const o = p;
+    const c = o - paso;
+    add(o, o + paso * 0.15, c - paso * 0.15, c);
+    p = c;
   }
-  const s = detectSignal('PAR-E', plano);
-  check('sin direccion (ADX bajo) no hay señal', s === null);
-  check('el estado queda limpio', estados.get('PAR-E')?.impulso === null);
+
+  // Doji verde
+  const dojiHigh = p + 0.0006;
+  add(p - 0.0001, dojiHigh, p - 0.0007, p);
+
+  // Vela de fuerza verde que rompe la mecha superior del doji
+  const o = p;
+  const c = o + 0.0015;
+  add(o, Math.max(c, dojiHigh) + 0.0002, o - 0.0002, c);
+
+  // Vela en formación (la que el bot tiene que ignorar)
+  add(c, c + 0.0003, c - 0.0003, c + 0.0001);
+
+  return velas;
+}
+
+console.log('\n== 1. Detecta el patrón sobre velas del broker ==');
+{
+  estados.clear();
+  const velas = construirSerie();
+  const s = detectSignal('PAR-A', velas);
+  check('da señal', s !== null);
+  check('la dirección es VENTA (continuidad del impulso bajista)', s?.direction === 'PUT', s?.direction);
+  check('el precio de referencia es el cierre de la vela de fuerza',
+    s?.entryPrice === velas[velas.length - 2].close, String(s?.entryPrice));
+  check('el motivo explica el patrón', (s?.reason || '').includes('Impulso'), s?.reason);
+}
+
+console.log('\n== 2. La vela en formación no cuenta ==');
+{
+  estados.clear();
+  const velas = construirSerie();
+  // Si NO se descartara la última, la "vela de fuerza" sería la vela en
+  // formación y no habría patrón.
+  const s = detectSignal('PAR-B', velas);
+  check('se analiza la última vela CERRADA', s !== null);
+  check('queda registrada la vela cerrada, no la que se está formando',
+    estados.get('PAR-B')?.ultimaVelaProcesada === velas[velas.length - 2].time);
+}
+
+console.log('\n== 3. La misma vela no se analiza dos veces ==');
+{
+  estados.clear();
+  const velas = construirSerie();
+  const primera = detectSignal('PAR-C', velas);
+  const repetida = detectSignal('PAR-C', velas);
+  check('la primera pasada da señal', primera !== null);
+  check('repetir las mismas velas no vuelve a disparar', repetida === null);
+}
+
+console.log('\n== 4. Cada par lleva su propia cuenta ==');
+{
+  estados.clear();
+  const velas = construirSerie();
+  const a = detectSignal('PAR-D', velas);
+  const b = detectSignal('PAR-E', velas);
+  check('el par D da señal', a !== null);
+  check('el par E también, no se pisan', b !== null);
+  check('cada uno guarda su estado', estados.size === 2, String(estados.size));
+}
+
+console.log('\n== 5. Se usa la configuración guardada ==');
+{
+  estados.clear();
+  const velas = construirSerie();
+
+  const guardada = JSON.stringify({ minConfidence: 99, adxMin: 30 });
+  const config = parseConfig(guardada);
+  check('parseConfig lee los valores del usuario', config.minConfidence === 99 && config.adxMin === 30);
+  check('y mantiene los de fábrica que no se tocaron',
+    config.impulseMinCandles === DEFAULT_STRATEGY_CONFIG.impulseMinCandles);
+
+  const s = detectSignal('PAR-F', velas, config);
+  check('con la confianza mínima al 99% no entra', s === null);
+
+  estados.clear();
+  const s2 = detectSignal('PAR-F', velas, parseConfig('{}'));
+  check('con la configuración de fábrica sí entra', s2 !== null);
+
+  check('una configuración corrupta no rompe nada',
+    parseConfig('{esto no es json').impulseMinCandles === DEFAULT_STRATEGY_CONFIG.impulseMinCandles);
+}
+
+console.log('\n== 6. Se avisa del motivo cuando no hay entrada ==');
+{
+  estados.clear();
+  const logs: string[] = [];
+  const plano: Candle[] = [];
+  let t = T0;
+  for (let i = 0; i < 50; i++) {
+    plano.push({ time: t, open: 1.1, high: 1.1001, low: 1.0999, close: 1.1, volume: 100 });
+    t += 60;
+  }
+  const s = detectSignal('PAR-G', plano, DEFAULT_STRATEGY_CONFIG, (_t, m) => logs.push(m));
+  check('en mercado plano no entra', s === null);
+  check('y deja escrito por qué', logs.length === 1 && logs[0].includes('lateral'), logs.join(' | '));
 }
 
 console.log(`\n${pasadas} pruebas correctas, ${fallos} fallidas\n`);

@@ -59,7 +59,12 @@ export async function GET(req: NextRequest) {
       signals: result.signals,
       isLateral: result.isLateral,
       lateralScore: result.lateralScore,
+      adx: result.adx,
+      atr: result.atr,
       lastSignal: result.lastSignal,
+      // Motivo exacto por el que no hay entrada, para poder ajustar el
+      // parámetro correcto en vez de ir a ciegas.
+      lastRejection: result.lastRejection,
       description: result.description,
       config,
       timestamp: new Date().toISOString(),
