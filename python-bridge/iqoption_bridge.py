@@ -84,6 +84,18 @@ logging.basicConfig(
 logger = logging.getLogger("Bridge")
 logging.getLogger('werkzeug').setLevel(logging.WARNING)
 
+# Todo queda tambien en logs\python-bridge.log, para poder mirarlo despues.
+try:
+    import os
+    _LOG_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'logs')
+    os.makedirs(_LOG_DIR, exist_ok=True)
+    _fh = logging.FileHandler(os.path.join(_LOG_DIR, 'python-bridge.log'), encoding='utf-8')
+    _fh.setFormatter(logging.Formatter('%(asctime)s [%(levelname)s] %(message)s'))
+    logging.getLogger().addHandler(_fh)
+    print("[OK] Registro en logs/python-bridge.log")
+except Exception as _e:
+    print("[AVISO] No se pudo crear el archivo de registro: %s" % _e)
+
 app = Flask(__name__)
 CORS(app)
 
@@ -112,6 +124,42 @@ _assets_cache = {'data': {}, 'ts': 0}
 _ASSETS_TTL = 60
 
 # ====== CONEXION ======
+
+def _esperar_respuesta(leer, limite=25.0, paso=0.05):
+    """
+    Espera un dato del broker cediendo el procesador.
+
+    La libreria hace esto con bucles `while dato is None: pass`, SIN pausa. Eso
+    deja un nucleo al 100% y, por como funciona Python (un solo hilo ejecuta a
+    la vez), bloquea al resto del puente hasta 30 segundos. Mientras tanto la
+    comprobacion de salud no llegaba a responder y el bot creia que el puente
+    se habia caido o que se habia perdido la conexion con el broker.
+    """
+    inicio = time.time()
+    while True:
+        valor = leer()
+        if valor is not None:
+            return valor
+        if time.time() - inicio > limite:
+            return None
+        time.sleep(paso)
+
+
+def _pedir_init_v2(limite=25.0):
+    """Lista de activos (turbo + binary) sin bucle de espera activa."""
+    api = iq_client.api
+    api.api_option_init_all_result_v2 = None
+    api.get_api_option_init_all_v2()
+    return _esperar_respuesta(lambda: api.api_option_init_all_result_v2, limite)
+
+
+def _pedir_velas(pair, timeframe, count, limite=15.0):
+    """Velas sin bucle de espera activa. Se llama cada minuto por cada par."""
+    api = iq_client.api
+    api.candles.candles_data = None
+    api.getcandles(ACTIVES[pair], timeframe, count, int(time.time()))
+    return _esperar_respuesta(lambda: api.candles.candles_data, limite)
+
 
 def _reset_estado_libreria():
     """
@@ -293,7 +341,7 @@ def _get_binary_assets(force=False):
         return _assets_cache['data']
 
     with _lock:
-        raw = iq_client.get_all_init_v2()
+        raw = _pedir_init_v2()
 
     if not raw:
         raise RuntimeError('el broker no devolvio la lista de activos')
@@ -396,6 +444,17 @@ def login():
     })
     _assets_cache['ts'] = 0
 
+    # Se precarga la lista de pares en segundo plano: asi la pantalla de Pares
+    # responde al instante en vez de tener que esperar al broker.
+    def _precargar():
+        try:
+            _get_binary_assets(force=True)
+            logger.info("Lista de pares precargada")
+        except Exception as e:
+            logger.warning("No se pudo precargar la lista de pares: %s", e)
+
+    threading.Thread(target=_precargar, daemon=True).start()
+
     return jsonify({
         'success': True,
         'profile': result,
@@ -470,9 +529,7 @@ def get_candles():
 
     try:
         with _lock:
-            # IMPORTANTE: get_candles espera el NOMBRE del par, no el id numerico.
-            # Pasarle un int hace que devuelva None en silencio.
-            raw = iq_client.get_candles(pair, timeframe, count, int(time.time()))
+            raw = _pedir_velas(pair, timeframe, count)
     except Exception as e:
         logger.error("Error pidiendo velas de %s: %s", pair, e)
         return _fail('Error pidiendo velas: %s' % e, 500)

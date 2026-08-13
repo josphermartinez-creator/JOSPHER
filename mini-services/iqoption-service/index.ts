@@ -23,6 +23,7 @@ let bridgeConnected = false; // ademas hay sesion viva en IQ Option
 let profile: any = null;
 let accountType: 'PRACTICE' | 'REAL' = 'PRACTICE';
 let lastBridgeCheck = 0;
+let fallosSeguidos = 0;
 
 interface BridgeResult<T = any> {
   success: boolean;
@@ -64,9 +65,25 @@ async function checkBridge(force = false): Promise<{ up: boolean; connected: boo
   }
   lastBridgeCheck = now;
 
-  const res = await bridgeFetch('/health', {}, 3000);
-  bridgeUp = res.success;
-  bridgeConnected = res.success && res.data?.connected === true;
+  // 10s, no 3: si el puente esta atendiendo una peticion pesada, con 3s se
+  // daba por caido y el bot decia "el puente se desconecto" sin ser verdad.
+  const res = await bridgeFetch('/health', {}, 10000);
+
+  if (res.success) {
+    fallosSeguidos = 0;
+    bridgeUp = true;
+    bridgeConnected = res.data?.connected === true;
+  } else {
+    // Un fallo suelto no basta para dar el puente por caido: puede estar
+    // ocupado con una peticion larga. Hacen falta dos seguidos.
+    fallosSeguidos++;
+    if (fallosSeguidos >= 2) {
+      bridgeUp = false;
+      bridgeConnected = false;
+    }
+    console.log(`[IQ Service] Salud del puente fallida (${fallosSeguidos}): ${res.error}`);
+  }
+
   return { up: bridgeUp, connected: bridgeConnected };
 }
 
