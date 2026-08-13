@@ -60,4 +60,3 @@ __pycache__/
 *.pyc
 prisma/db/*.db
 prisma/db/*.db-journal
-!.env.example

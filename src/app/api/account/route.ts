@@ -139,13 +139,34 @@ export async function POST(req: NextRequest) {
       realConnection: true,
       message: `Conectado a IQ Options (${type}) · Saldo: $${balance.toFixed(2)}`,
     });
-  } catch (error) {
+  } catch (error: any) {
     console.error('POST /api/account error:', error);
     return NextResponse.json(
-      { success: false, error: 'Error al iniciar sesión' },
+      { success: false, error: explicarError(error) },
       { status: 500 }
     );
   }
+}
+
+/**
+ * Convierte la excepción en algo accionable.
+ * Antes esto devolvía siempre "Error al iniciar sesión", que no dice nada:
+ * el fallo podía ser la base de datos, el servicio o el propio broker.
+ */
+function explicarError(error: any): string {
+  const msg = String(error?.message || error || '');
+
+  if (
+    error?.code === 'P2021' || error?.code === 'P2022' || error?.code === 'P1012' ||
+    msg.includes('no such table') || msg.includes('no such column') ||
+    msg.includes('ENOENT') || msg.includes('unable to open database')
+  ) {
+    return 'La base de datos no está lista. Cierra el bot y haz doble clic en reparar.bat';
+  }
+  if (error?.code === 'P2002') {
+    return 'Ya existe otra cuenta con ese email en la base de datos local.';
+  }
+  return `Error al iniciar sesión: ${msg.slice(0, 200)}`;
 }
 
 // PUT /api/account - sincronizar el saldo REAL del broker

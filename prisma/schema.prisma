@@ -6,7 +6,12 @@ generator client {
 
 datasource db {
   provider = "sqlite"
-  url      = env("DATABASE_URL")
+  // Ruta fija, relativa a esta carpeta (prisma/). Antes venia de la variable
+  // DATABASE_URL en un archivo .env que NO se sube al repositorio: al bajar el
+  // proyecto como ZIP faltaba, Prisma fallaba en toda consulta y el login daba
+  // "Error al iniciar sesion". Al ser una base de datos SQLite local, no hay
+  // ningun secreto que ocultar y ponerlo aqui evita el problema para siempre.
+  url      = "file:./db/custom.db"
 }
 
 model Account {

@@ -12,6 +12,17 @@ echo.
 
 if not exist "node_modules" goto :no_install
 
+:: ====== PASO 0: La base de datos tiene que existir ======
+:: Si falta, toda consulta falla y el login devuelve error sin decir por que.
+if exist "%~dp0prisma\db\custom.db" goto :bd_lista
+echo [AVISO] Falta la base de datos - creandola...
+call npx prisma generate
+call npx prisma db push --accept-data-loss
+if errorlevel 1 goto :bd_error
+echo       Base de datos creada
+:bd_lista
+echo.
+
 :: ====== PASO 1: Limpiar procesos anteriores ======
 echo [1/6] Limpiando procesos anteriores...
 for /f "tokens=5" %%a in ('netstat -ano ^| findstr ":3000 " ^| findstr "LISTENING" 2^>nul') do taskkill /PID %%a /F >nul 2>&1
@@ -97,6 +108,14 @@ exit /b 0
 :no_bridge
 echo       [ERROR] No se encuentra python-bridge\iqoption_bridge.py
 echo       El bot no puede operar sin el puente.
+pause
+exit /b 1
+
+:bd_error
+echo.
+echo [ERROR] No se pudo crear la base de datos.
+echo Haz doble clic en reparar.bat y vuelve a intentarlo.
+echo.
 pause
 exit /b 1
 
