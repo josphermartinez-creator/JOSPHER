@@ -49,9 +49,7 @@ export async function serviceRequest<T = any>(
       socket.emit(event, ...args, (res: any) => finish(res ?? { success: false, error: 'Respuesta vacía' }));
     });
 
-    socket.on('connect_error', (err: any) => {
-      finish({ success: false, error: `Servicio no disponible en ${url}: ${err?.message || 'sin conexión'}` });
-    });
+    socket.on('connect_error', () => finish({ success: false, error: servicioCaido(url) }));
   });
 }
 
@@ -112,10 +110,19 @@ export async function serviceWaitFor<T = any>(
 
     socket.on('connect', () => socket.emit(emitEvent, emitPayload));
     socket.on(waitEvent, (res: any) => finish(res ?? { success: false, error: 'Respuesta vacía' }));
-    socket.on('connect_error', (err: any) => {
-      finish({ success: false, error: `Servicio no disponible en ${url}: ${err?.message || 'sin conexión'}` });
-    });
+    socket.on('connect_error', () => finish({ success: false, error: servicioCaido(url) }));
   });
+}
+
+/** Mensaje accionable cuando un mini-servicio no responde. */
+export function servicioCaido(url: string): string {
+  if (url.includes('3003')) {
+    return 'El servicio IQ Option (puerto 3003) no está corriendo. Cierra todo y ejecuta arrancar.bat.';
+  }
+  if (url.includes('3004')) {
+    return 'El auto-trader (puerto 3004) no está corriendo. Cierra todo y ejecuta arrancar.bat.';
+  }
+  return `No responde el servicio en ${url}. Ejecuta arrancar.bat.`;
 }
 
 /** Estado del servicio IQ Option vía su endpoint HTTP /health. */

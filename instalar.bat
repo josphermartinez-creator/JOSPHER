@@ -10,7 +10,7 @@ echo ============================================================
 echo.
 
 :: ====== PASO 1: Verificar Node.js ======
-echo [1/5] Verificando Node.js...
+echo [1/7] Verificando Node.js...
 where node >nul 2>&1
 if errorlevel 1 goto :no_node
 for /f "tokens=*" %%i in ('node --version 2^>nul') do set NODE_VER=%%i
@@ -18,7 +18,7 @@ echo       Node.js %NODE_VER% encontrado - OK
 echo.
 
 :: ====== PASO 2: Verificar Python ======
-echo [2/5] Verificando Python...
+echo [2/7] Verificando Python...
 where python >nul 2>&1
 if errorlevel 1 goto :no_python
 for /f "tokens=*" %%i in ('python --version 2^>nul') do set PY_VER=%%i
@@ -26,7 +26,7 @@ echo       %PY_VER% encontrado - OK
 echo.
 
 :: ====== PASO 3: Instalar dependencias del bot ======
-echo [3/5] Instalando dependencias del bot (puede tardar)...
+echo [3/7] Instalando dependencias del bot (puede tardar)...
 cd /d "%~dp0"
 call npm install
 if errorlevel 1 goto :dep_error
@@ -34,32 +34,58 @@ echo       Dependencias del bot instaladas - OK
 echo.
 
 :: ====== PASO 4: Instalar mini-servicios ======
-echo [4/5] Instalando mini-servicios...
+echo [4/7] Instalando mini-servicios...
 echo       - IQ Option service...
 cd /d "%~dp0mini-services\iqoption-service"
-call npm install 2>nul
+call npm install
+if errorlevel 1 goto :dep_error
 echo       - AutoTrader service...
 cd /d "%~dp0mini-services\autotrader-service"
-call npm install 2>nul
+call npm install
+if errorlevel 1 goto :dep_error
 cd /d "%~dp0"
 echo       Mini-servicios instalados - OK
 echo.
 
 :: ====== PASO 5: Instalar dependencias de Python ======
-echo [5/5] Instalando dependencias de Python...
-python -m pip install iqoptionapi requests flask flask-cors websocket-client
+echo [5/7] Instalando dependencias de Python...
+python -m pip install --upgrade requests flask flask-cors websocket-client
+echo.
+echo       Instalando iqoptionapi desde GitHub...
+echo       (la version de PyPI esta abandonada y NO sirve para operar)
+python -m pip uninstall -y iqoptionapi >nul 2>&1
+python -m pip install https://github.com/iqoptionapi/iqoptionapi/archive/refs/heads/master.zip
+if errorlevel 1 goto :py_error
+
+python -c "from iqoptionapi.stable_api import IQ_Option" >nul 2>&1
+if errorlevel 1 goto :py_error
 echo       Dependencias de Python instaladas - OK
 echo.
 
-:: ====== Configurar base de datos ======
-echo [EXTRA] Configurando base de datos...
-cd /d "%~dp0"
-call npx prisma db push --accept-data-loss 2>nul
-call npx prisma generate 2>nul
-echo       Base de datos lista - OK
+:: ====== PASO 6: Crear el archivo .env ======
+:: Sin DATABASE_URL, Prisma falla en TODAS las consultas y el login da error.
+echo [6/7] Configurando el archivo .env...
+if not exist "%~dp0db" mkdir "%~dp0db"
+if exist "%~dp0.env" goto :env_ok
+(
+echo DATABASE_URL="file:./db/custom.db"
+)> "%~dp0.env"
+echo       .env creado
+goto :env_done
+:env_ok
+echo       .env ya existe - se respeta el que hay
+:env_done
 echo.
 
-if not exist "%~dp0db" mkdir "%~dp0db"
+:: ====== PASO 7: Base de datos ======
+echo [7/7] Preparando la base de datos...
+cd /d "%~dp0"
+call npx prisma generate
+if errorlevel 1 goto :db_error
+call npx prisma db push --accept-data-loss
+if errorlevel 1 goto :db_error
+echo       Base de datos lista - OK
+echo.
 
 echo ============================================================
 echo   INSTALACION COMPLETADA!
@@ -89,8 +115,27 @@ exit /b 1
 
 :dep_error
 echo.
-echo [ERROR] No se pudieron instalar las dependencias.
-echo Verifica tu conexion a internet.
+echo [ERROR] No se pudieron instalar las dependencias de Node.
+echo Verifica tu conexion a internet y vuelve a ejecutar instalar.bat
+echo.
+pause
+exit /b 1
+
+:py_error
+echo.
+echo [ERROR] No se pudo instalar la libreria de IQ Option.
+echo.
+echo Instalala a mano con:
+echo   python -m pip install https://github.com/iqoptionapi/iqoptionapi/archive/refs/heads/master.zip
+echo.
+pause
+exit /b 1
+
+:db_error
+echo.
+echo [ERROR] No se pudo preparar la base de datos.
+echo Comprueba que existe el archivo .env con DATABASE_URL y ejecuta:
+echo   npx prisma db push
 echo.
 pause
 exit /b 1
