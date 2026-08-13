@@ -11,13 +11,15 @@ echo ============================================================
 echo.
 
 if not exist "node_modules" goto :no_install
+if not exist "mini-services\iqoption-service\node_modules" goto :no_install
+if not exist "mini-services\autotrader-service\node_modules" goto :no_install
 
 :: ====== PASO 0: La base de datos tiene que existir ======
 :: Si falta, toda consulta falla y el login devuelve error sin decir por que.
 if exist "%~dp0prisma\db\custom.db" goto :bd_lista
 echo [AVISO] Falta la base de datos - creandola...
-call npx prisma generate
-call npx prisma db push --accept-data-loss
+call npm run db:generate
+call npm run db:push
 if errorlevel 1 goto :bd_error
 echo       Base de datos creada
 :bd_lista
@@ -72,14 +74,14 @@ echo.
 
 :: ====== PASO 4: Servicio IQ Option ======
 echo [4/6] Iniciando servicio IQ Option (3003)...
-start "QuantumBot-IQService" /min cmd /c "cd /d "%~dp0mini-services\iqoption-service" && npx tsx index.ts"
+start "QuantumBot-IQService" /min cmd /c "cd /d "%~dp0mini-services\iqoption-service" && npm start"
 timeout /t 4 /nobreak >nul
 echo       OK
 echo.
 
 :: ====== PASO 5: AutoTrader ======
 echo [5/6] Iniciando AutoTrader (3004)...
-start "QuantumBot-AutoTrader" /min cmd /c "cd /d "%~dp0mini-services\autotrader-service" && npx tsx index.ts"
+start "QuantumBot-AutoTrader" /min cmd /c "cd /d "%~dp0mini-services\autotrader-service" && npm start"
 timeout /t 4 /nobreak >nul
 echo       OK
 echo.
@@ -120,8 +122,8 @@ pause
 exit /b 1
 
 :no_install
-echo [ERROR] El bot no esta instalado.
-echo Ejecuta primero: instalar.bat
+echo [ERROR] Faltan dependencias.
+echo Haz doble clic en reparar.bat y despues vuelve a arrancar.bat
 echo.
 pause
 exit /b 1
