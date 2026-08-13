@@ -10,7 +10,7 @@ echo ============================================================
 echo.
 
 :: ====== PASO 1: Verificar Node.js ======
-echo [1/7] Verificando Node.js...
+echo [1/6] Verificando Node.js...
 where node >nul 2>&1
 if errorlevel 1 goto :no_node
 for /f "tokens=*" %%i in ('node --version 2^>nul') do set NODE_VER=%%i
@@ -18,7 +18,7 @@ echo       Node.js %NODE_VER% encontrado - OK
 echo.
 
 :: ====== PASO 2: Verificar Python ======
-echo [2/7] Verificando Python...
+echo [2/6] Verificando Python...
 where python >nul 2>&1
 if errorlevel 1 goto :no_python
 for /f "tokens=*" %%i in ('python --version 2^>nul') do set PY_VER=%%i
@@ -26,7 +26,7 @@ echo       %PY_VER% encontrado - OK
 echo.
 
 :: ====== PASO 3: Instalar dependencias del bot ======
-echo [3/7] Instalando dependencias del bot (puede tardar)...
+echo [3/6] Instalando dependencias del bot (puede tardar)...
 cd /d "%~dp0"
 call npm install
 if errorlevel 1 goto :dep_error
@@ -34,7 +34,7 @@ echo       Dependencias del bot instaladas - OK
 echo.
 
 :: ====== PASO 4: Instalar mini-servicios ======
-echo [4/7] Instalando mini-servicios...
+echo [4/6] Instalando mini-servicios...
 echo       - IQ Option service...
 cd /d "%~dp0mini-services\iqoption-service"
 call npm install
@@ -48,7 +48,7 @@ echo       Mini-servicios instalados - OK
 echo.
 
 :: ====== PASO 5: Instalar dependencias de Python ======
-echo [5/7] Instalando dependencias de Python...
+echo [5/6] Instalando dependencias de Python...
 python -m pip install --upgrade requests flask flask-cors websocket-client
 echo.
 echo       Instalando iqoptionapi desde GitHub...
@@ -62,23 +62,10 @@ if errorlevel 1 goto :py_error
 echo       Dependencias de Python instaladas - OK
 echo.
 
-:: ====== PASO 6: Crear el archivo .env ======
-:: Sin DATABASE_URL, Prisma falla en TODAS las consultas y el login da error.
-echo [6/7] Configurando el archivo .env...
-if not exist "%~dp0db" mkdir "%~dp0db"
-if exist "%~dp0.env" goto :env_ok
-(
-echo DATABASE_URL="file:./db/custom.db"
-)> "%~dp0.env"
-echo       .env creado
-goto :env_done
-:env_ok
-echo       .env ya existe - se respeta el que hay
-:env_done
-echo.
-
-:: ====== PASO 7: Base de datos ======
-echo [7/7] Preparando la base de datos...
+:: ====== PASO 6: Base de datos ======
+:: La ruta de la base de datos esta fijada en prisma/schema.prisma, asi que no
+:: hace falta ningun archivo .env.
+echo [6/6] Preparando la base de datos...
 cd /d "%~dp0"
 call npx prisma generate
 if errorlevel 1 goto :db_error
@@ -134,8 +121,7 @@ exit /b 1
 :db_error
 echo.
 echo [ERROR] No se pudo preparar la base de datos.
-echo Comprueba que existe el archivo .env con DATABASE_URL y ejecuta:
-echo   npx prisma db push
+echo Haz doble clic en reparar.bat
 echo.
 pause
 exit /b 1

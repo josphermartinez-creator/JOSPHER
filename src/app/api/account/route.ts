@@ -156,20 +156,15 @@ export async function POST(req: NextRequest) {
 function explicarError(error: any): string {
   const msg = String(error?.message || error || '');
 
-  if (!process.env.DATABASE_URL) {
-    return 'Falta el archivo .env con DATABASE_URL. Ejecuta instalar.bat (crea el .env y la base de datos).';
-  }
-  if (msg.includes('DATABASE_URL') || error?.code === 'P1012') {
-    return 'La base de datos no está configurada. Ejecuta: npx prisma db push';
-  }
-  if (error?.code === 'P2021' || error?.code === 'P2022' || msg.includes('no such table') || msg.includes('no such column')) {
-    return 'La base de datos está desactualizada. Ejecuta: npx prisma db push';
+  if (
+    error?.code === 'P2021' || error?.code === 'P2022' || error?.code === 'P1012' ||
+    msg.includes('no such table') || msg.includes('no such column') ||
+    msg.includes('ENOENT') || msg.includes('unable to open database')
+  ) {
+    return 'La base de datos no está lista. Cierra el bot y haz doble clic en reparar.bat';
   }
   if (error?.code === 'P2002') {
     return 'Ya existe otra cuenta con ese email en la base de datos local.';
-  }
-  if (msg.includes('ENOENT') || msg.includes('unable to open database')) {
-    return 'No se encuentra el archivo de la base de datos. Ejecuta: npx prisma db push';
   }
   return `Error al iniciar sesión: ${msg.slice(0, 200)}`;
 }

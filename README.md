@@ -9,6 +9,16 @@ Bot automático de trading para opciones binarias con conexión real a IQ Option
 2. Doble click en `instalar.bat`
 3. Espera a que termine (instala dependencias)
 
+> **Todo se hace con doble click.** No hace falta escribir comandos en la
+> consola. Si escribes `npx` a mano en PowerShell, Windows lo bloquea por
+> política de scripts; y si lo escribes desde otra carpeta, no encuentra el
+> proyecto. Los `.bat` se sitúan solos en la carpeta correcta.
+
+### Si algo falla
+1. Doble click en `diagnostico.bat` → te dice qué falta
+2. Doble click en `reparar.bat` → lo arregla solo (dependencias, base de datos
+   y la librería de IQ Option)
+
 ### Cada día (arrancar)
 1. Doble click en `arrancar.bat`
 2. Se abren 4 ventanas (no las cierres)

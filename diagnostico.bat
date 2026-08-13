@@ -77,35 +77,17 @@ if exist "mini-services\autotrader-service\node_modules" (
 )
 echo.
 
-echo [7] Archivo .env
-:: Sin DATABASE_URL, Prisma falla en toda consulta y el login da error.
-if exist ".env" (
-    findstr /C:"DATABASE_URL" ".env" >nul 2>&1
-    if errorlevel 1 (
-        echo     [MAL] .env existe pero no tiene DATABASE_URL
-        echo     Añade esta linea:  DATABASE_URL="file:./db/custom.db"
-        set /a FALLOS+=1
-    ) else (
-        echo     [OK] .env con DATABASE_URL
-    )
+echo [7] Base de datos
+:: La ruta esta fijada en prisma/schema.prisma, no hace falta ningun .env.
+if exist "prisma\db\custom.db" (
+    echo     [OK] prisma\db\custom.db
 ) else (
-    echo     [FALTA] No existe .env - es la causa mas comun del
-    echo     "Error al iniciar sesion". Ejecuta instalar.bat, o crealo a mano
-    echo     con esta unica linea:  DATABASE_URL="file:./db/custom.db"
+    echo     [FALTA] Haz doble clic en reparar.bat
     set /a FALLOS+=1
 )
 echo.
 
-echo [8] Base de datos
-if exist "db\custom.db" (
-    echo     [OK] db\custom.db
-) else (
-    echo     [FALTA] Ejecuta:  npx prisma db push
-    set /a FALLOS+=1
-)
-echo.
-
-echo [9] Puente Python (puerto 5005)
+echo [8] Puente Python (puerto 5005)
 curl -s --max-time 3 http://localhost:5005/health >nul 2>&1
 if errorlevel 1 (
     echo     [PARADO] Arranca con arrancar.bat
@@ -116,7 +98,7 @@ if errorlevel 1 (
 )
 echo.
 
-echo [10] Servicios
+echo [9] Servicios
 call :puerto 3000 "App (Next.js)"
 call :puerto 3003 "Servicio IQ Option"
 call :puerto 3004 "AutoTrader"
@@ -129,7 +111,9 @@ if "%FALLOS%"=="0" (
     echo   Si aun asi falla el login, mira la ventana QuantumBot-Python:
     echo   ahi aparece el motivo exacto que devuelve IQ Option.
 ) else (
-    echo   %FALLOS% PROBLEMA^(S^) ENCONTRADO^(S^) - revisa los [FALTA] de arriba
+    echo   %FALLOS% PROBLEMA^(S^) ENCONTRADO^(S^)
+    echo.
+    echo   Haz doble clic en reparar.bat: arregla todo esto solo.
 )
 echo ============================================================
 echo.

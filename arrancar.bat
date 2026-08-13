@@ -12,22 +12,14 @@ echo.
 
 if not exist "node_modules" goto :no_install
 
-:: ====== PASO 0: Comprobaciones que hacen fallar el login ======
-:: Si el proyecto se bajo como ZIP de GitHub, el .env NO viene incluido
-:: (esta en .gitignore) y sin DATABASE_URL falla toda consulta a la base de
-:: datos: el login devuelve error sin decir por que.
-if not exist "%~dp0db" mkdir "%~dp0db"
-if exist "%~dp0.env" goto :env_listo
-echo [AVISO] No habia archivo .env - se crea ahora
-(
-echo DATABASE_URL="file:./db/custom.db"
-)> "%~dp0.env"
-:env_listo
-
-if exist "%~dp0db\custom.db" goto :bd_lista
+:: ====== PASO 0: La base de datos tiene que existir ======
+:: Si falta, toda consulta falla y el login devuelve error sin decir por que.
+if exist "%~dp0prisma\db\custom.db" goto :bd_lista
 echo [AVISO] Falta la base de datos - creandola...
+call npx prisma generate
 call npx prisma db push --accept-data-loss
 if errorlevel 1 goto :bd_error
+echo       Base de datos creada
 :bd_lista
 echo.
 
@@ -122,11 +114,7 @@ exit /b 1
 :bd_error
 echo.
 echo [ERROR] No se pudo crear la base de datos.
-echo Ejecuta instalar.bat, o a mano desde una ventana de CMD (no PowerShell):
-echo   npx prisma db push
-echo.
-echo Si usas PowerShell y sale "la ejecucion de scripts esta deshabilitada",
-echo escribe primero  cmd  y ejecuta el comando ahi.
+echo Haz doble clic en reparar.bat y vuelve a intentarlo.
 echo.
 pause
 exit /b 1
